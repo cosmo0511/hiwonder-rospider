@@ -131,54 +131,320 @@
 쓰면 **사각지대 안이라 애초에 측정이 안 되는 거리**를 임계값으로 쓰게 된다. 임계값은
 센서 기하에서 역산해야 한다.
 
-## 5. 실행 순서
+## 5. 어떻게 돌리나
+
+### 5.0 명령을 어디서 치는지 먼저 구분하자
+
+이 과제의 명령은 **세 군데**에서 친다. 헷갈리면 거의 모든 에러가 여기서 나온다.
+
+| 프롬프트 | 어디 | 무엇을 치나 |
+|---|---|---|
+| `user@노트북:~/hiwonder-rospider$` | **호스트** | docker 명령, `xhost`, `nvidia-smi` |
+| `root@...:/workspace#` | **컨테이너** (conda 비활성) | `source .../isaac-env.sh` 한 줄 |
+| `(isaac_lab) root@...:/workspace/rospider#` | **컨테이너 + conda 활성** | 이 과제의 모든 python 명령 |
+
+레포는 컨테이너 안 **`/workspace/rospider`** 에 bind mount 된다. 호스트에서 수정한 파일이
+즉시 보이고, 컨테이너가 만든 결과물(`outputs/`)도 호스트 레포 안에 그대로 남는다.
+**결과를 꺼내려고 `docker cp` 를 할 필요가 없다.**
+
+### 5.1 호스트: 컨테이너 띄우기
+
+Isaac Sim / Isaac Lab 설치가 아직이면 먼저
+[`docker/isaaclab/QUICKSTART.md`](../docker/isaaclab/QUICKSTART.md) 를 끝내고 오자.
+여기서는 설치가 끝난 상태를 가정한다.
 
 ```bash
-# --- 호스트에서 (1회) ---
-bash docker/isaaclab/host_setup.sh
-xhost +local:root                      # GUI 쓸 거면 필수
+cd ~/hiwonder-rospider           # 레포를 클론한 곳
 
-docker compose -f docker/isaaclab/docker-compose.yml build base
+xhost +local:root                # GUI 를 쓸 거면 매 로그인마다 1회
 docker compose -f docker/isaaclab/docker-compose.yml run --rm base
-
-# --- 컨테이너 안 ---
-bash /opt/isaaclab-steps/run_all.sh    # 이미 돼 있으면 건너뜀
-bash /opt/isaaclab-steps/diag.sh       # 상태 점검
-cd /workspace/rospider
-
-# 0단계: 로봇 에셋 받기 (ROS 불필요)
-bash tasks/sensor_fusion/00_fetch_description.sh
-
-# 1단계: xacro -> URDF (ROS 불필요, Kit 불필요)
-pip install xacro
-python tasks/sensor_fusion/01_xacro_to_urdf.py
-#   -> [확인] link 51개, joint 50개 (revolute 29개) / 메시 전부 존재
-
-# 1.5단계: 센서 외부 파라미터 확인 (Kit 불필요)
-python tasks/sensor_fusion/urdf_fk.py --joints joint2=0.85,joint3=-1.60,joint4=-1.26
-#   -> 카메라/IMU 포즈와 R_cam<-imu 가 출력된다. fusion.py 기본값과 같아야 한다
-
-# 1.9단계: 융합 로직만 먼저 검증 (Kit 불필요, 수초)
-python tasks/sensor_fusion/test_fusion.py
-#   -> "전부 통과" 가 나와야 다음으로 간다
-
-# 2단계: URDF -> USD  (여기서부터 Kit)
-python tasks/sensor_fusion/02_urdf_to_usd.py            # 헤드리스 변환
-python tasks/sensor_fusion/02_urdf_to_usd.py --view     # 눈으로 확인
-
-# 3단계: 융합 시뮬레이션. --enable_cameras 필수
-python tasks/sensor_fusion/run_fusion_demo.py --enable_cameras --pitch_deg 0  --tag level
-python tasks/sensor_fusion/run_fusion_demo.py --enable_cameras --pitch_deg 20 --tag pitch20
-python tasks/sensor_fusion/run_fusion_demo.py --enable_cameras --pitch_deg 0 \
-       --obstacle_height 0.02 --tag lowstep
-python tasks/sensor_fusion/run_fusion_demo.py --enable_cameras --gui --pitch_deg 20   # 스크린샷용
-
-# 결과: outputs/sensor_fusion/{tag}_log.csv, {tag}_d0.90.png, .npz ...
 ```
 
-**ROS 는 한 줄도 안 쓴다.** `isaac-shell` 안에서 `/opt/ros/humble/setup.bash` 를 절대
-source 하지 말 것 (3.10 심볼이 섞여 Kit 기동이 깨진다). RViz 로 보고 싶어지면
-그때 `ros-shell` 을 따로 열고 표준 메시지로만 주고받자.
+> **`base` 서비스를 쓴다.** 설치가 담긴 도커 볼륨(`isaac-conda`, `isaac-lab`)이
+> `base` 에만 붙어 있다. `isaaclab`(full) 서비스는 한 번에 빌드하는 경로이고
+> 이 레포에서 완주 검증이 안 됐다.
+
+프롬프트가 `root@...:/workspace#` 로 바뀌면 들어온 것이다.
+
+### 5.2 컨테이너: conda 활성화 (매번 1회)
+
+```bash
+source /opt/isaaclab-scripts/isaac-env.sh
+cd /workspace/rospider
+```
+
+프롬프트에 **`(isaac_lab)`** 이 붙어야 한다. 안 붙으면 설치가 안 된 것이니
+`bash /opt/isaaclab-steps/diag.sh` 로 확인한다.
+
+확인 한 줄:
+
+```bash
+python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+# 2.7.0+cu128 True   <- 이렇게 나와야 한다
+```
+
+> **`python` 과 `isaaclab -p` 는 같다.** `isaaclab` 은 `/opt/IsaacLab/isaaclab.sh` 의
+> alias 고, `-p` 는 `${CONDA_PREFIX}/bin/python "$@"` 를 실행할 뿐이다. torch 를
+> 재설치하는 `ensure_cuda_torch()` 는 `-i`(설치) 경로에서만 돈다. `(isaac_lab)` 이
+> 활성화돼 있으면 **그냥 `python` 을 쓰면 된다.**
+>
+> **`isaac-shell` 안에서 ROS 를 source 하지 말 것.** python 3.10 심볼이 섞여
+> Kit 기동이 깨진다. 이 과제는 ROS 를 한 줄도 쓰지 않는다.
+
+### 5.3 준비물 설치 (최초 1회)
+
+`/opt/conda` 가 named volume 이라 **한 번만 깔면 컨테이너를 지워도 남는다.**
+
+```bash
+pip install xacro matplotlib
+```
+
+| 패키지 | 왜 | 없으면 |
+|---|---|---|
+| `xacro` | xacro → URDF 전개 | 1단계에서 바로 멈춘다 |
+| `matplotlib` | 4패널 결과 PNG | PNG 를 건너뛴다(`.npz` 와 CSV 는 그대로 나온다) |
+
+### 5.4 Kit 없이 되는 단계 — 여기부터 순서대로
+
+Kit(Isaac Sim) 을 띄우지 않는 단계를 앞에 몰아놨다. **문제가 생겼을 때 시뮬레이터
+탓인지 로직 탓인지 바로 갈린다.** 각 단계의 "성공 표시" 를 보고 다음으로 간다.
+
+#### 0단계 — 로봇 에셋 받기 (약 1분, 20 MB)
+
+```bash
+bash tasks/sensor_fusion/00_fetch_description.sh
+```
+
+성공 표시:
+
+```
+[3/3] 확인
+  xacro  : 9 개
+  메시   : 36 개
+```
+
+받아온 것은 `assets/rospider_description/` 에 들어간다. `.gitignore` 에 있으므로
+커밋되지 않는다(Hiwonder 저작물이다).
+
+#### 1단계 — xacro → URDF (수초)
+
+```bash
+python tasks/sensor_fusion/01_xacro_to_urdf.py
+```
+
+성공 표시:
+
+```
+[완료] assets/rospider_description/rospider.urdf (45378 bytes)
+[확인] link 51개, joint 50개 (revolute 29개)
+[확인] revolute 조인트: coxa_LF_joint, coxa_LM_joint, ... tibla_RR_joint
+[확인] 참조된 메시 파일 전부 존재
+```
+
+revolute 29개 = 다리 18 + 팔 5 + 그리퍼 6. 이 숫자가 다르면 xacro 가 바뀐 것이다.
+`[경고] 참조는 있는데 파일이 없는 메시` 가 뜨면 0단계를 다시 돌린다.
+
+#### 2단계 — 센서 외부 파라미터 확인 (즉시)
+
+```bash
+python tasks/sensor_fusion/urdf_fk.py --joints joint2=0.85,joint3=-1.60,joint4=-1.26
+```
+
+성공 표시 — 아래 행렬이 `fusion.py` 의 `FusionParams.r_cam_imu` 기본값과 **같아야 한다**:
+
+```
+depth_cam_frame   [0.13125 0.0013  0.25086]      [-0.38422  0.593616 -0.593607  0.384222]
+
+depth_cam_frame 축이 base_link 에서 가리키는 방향:
+  Z(view)  -> [ 0.9123  0.     -0.4095]        <- 전방 24.17도 하향
+
+R_cam<-imu (융합 코드에 넣을 상수):
+[[ 1.        0.        0.      ]
+ [ 0.       -0.409498 -0.912311]
+ [ 0.        0.912311 -0.409498]]
+```
+
+팔 자세를 바꿀 거면 `--joints` 값을 바꿔 돌리고, 나온 값을 `fusion.py` 와
+`rospider_cfg.py` 의 `CAM_*` 상수에 **같이** 반영한다. 한쪽만 바꾸면 조용히 틀린다.
+
+#### 3단계 — 융합 로직만 검증 (수초)
+
+```bash
+python tasks/sensor_fusion/test_fusion.py
+```
+
+성공 표시 — 마지막 줄이 `전부 통과` 다. 7절의 표가 이 출력이다.
+**여기서 실패하면 Isaac 으로 넘어가지 말자.** 융합 수식이나 상수가 틀린 것이다.
+
+### 5.5 Kit 을 띄우는 단계
+
+여기서부터 Isaac Sim 이 뜬다. **첫 실행은 셰이더 컴파일로 5~10분 멈춘 듯 보인다.**
+정상이다. 두 번째부터는 캐시(`isaac-cache-ov` 볼륨)가 있어 빠르다.
+
+#### 4단계 — URDF → USD 변환 (첫 실행 5~10분, 이후 1~2분)
+
+```bash
+python tasks/sensor_fusion/02_urdf_to_usd.py
+```
+
+성공 표시:
+
+```
+[완료] USD: /workspace/rospider/assets/usd/rospider.usd
+
+[리짓바디 24개] base_link, coxa_LF, coxa_LM, ..., link1, link2, link3, link4, link5
+[움직이는 조인트 29개] coxa_LF_joint, ..., joint1, ..., tibla_RR_joint
+```
+
+**이 출력의 바디 이름 목록을 꼭 보자.** `base_link` 가 있으면 `rospider_cfg.py` 의
+센서 prim 경로(`{ENV_REGEX_NS}/Robot/base_link/depth_cam`) 가 맞다. 없고
+`base_footprint` 같은 다른 이름이면 그 이름으로 바꿔야 한다.
+
+눈으로 확인 (GUI):
+
+```bash
+python tasks/sensor_fusion/02_urdf_to_usd.py --view
+```
+
+창이 떠서 로봇이 보여야 한다. **여기서 다리 자세를 잡는다** — 매뉴얼 0절에 적었듯
+다리 각도는 미검증이라, 메시가 바닥을 뚫거나 다리가 이상하게 꺾이면
+`rospider_cfg.py` 의 `joint_pos` 에서 `coxa_/femur_/tibla_` 값을 조금씩 바꿔가며
+다시 띄운다. base 가 고정이라 넘어지지는 않는다.
+
+#### 5단계 — 융합 시뮬레이션
+
+조건 하나씩 돌린다. 각 실행이 Kit 기동 포함 1~3분이다.
+
+```bash
+# 조건 1: 수평
+python tasks/sensor_fusion/run_fusion_demo.py --enable_cameras --pitch_deg 0 --tag level
+
+# 조건 2: 20도 숙임 (장애물·임계값 동일)
+python tasks/sensor_fusion/run_fusion_demo.py --enable_cameras --pitch_deg 20 --tag pitch20
+
+# 조건 3: 넘어갈 수 있는 2 cm 단차
+python tasks/sensor_fusion/run_fusion_demo.py --enable_cameras --pitch_deg 0 \
+       --obstacle_height 0.02 --tag lowstep
+
+# 조건 4(선택): 바닥 추정을 끄고 설치 높이 상수를 믿게 해 본다 — 의도된 실패
+python tasks/sensor_fusion/run_fusion_demo.py --enable_cameras --pitch_deg 20 \
+       --floor_mode assumed_height --tag pitch20_assumed
+```
+
+> `--enable_cameras` 는 `run_fusion_demo.py` 가 코드에서 강제로 켜므로 안 쳐도 돌아간다.
+> 그래도 적어 두는 게 좋다. **직접 새 스크립트를 쓸 때 이걸 빼먹으면** 뎁스가 빈
+> 텐서로 와서 한참 헤맨다.
+
+성공 표시 — 조건마다 한 줄씩 찍힌다:
+
+```
+[설정] pitch=20.0deg, 장애물 높이=0.15 m, floor_mode=estimated, 카메라 높이=0.318 m (수평일 때 0.367 m)
+[임계값] DANGER<0.3 m, WARN<0.6 m, 기울기>25.0deg, 충격>6.0 m/s^2
+
+장애물 0.90 m -> tilt= 20.0deg acc= 0.03 d_fused= 0.901 ... | fused=CLEAR  naive=DANGER  roi=WARN
+장애물 0.70 m -> ...
+  그림 저장: outputs/sensor_fusion/pitch20_d0.70.png
+...
+[완료] 로그 outputs/sensor_fusion/pitch20_log.csv (50 행)
+```
+
+세 열(`fused` / `naive` / `roi`) 이 **엇갈리는 줄**이 과제에서 보여줄 장면이다.
+
+#### 6단계 — 스크린샷용 GUI 실행
+
+노션 노트에 넣을 "장면 스크린샷" 은 여기서 찍는다.
+
+```bash
+# 호스트에서 한 번 (매 로그인마다)
+xhost +local:root
+
+# 컨테이너에서
+python tasks/sensor_fusion/run_fusion_demo.py --enable_cameras --gui --pitch_deg 20
+```
+
+측정과 로그가 끝나면 창이 계속 떠 있다. 로봇·장애물·바닥이 보이는 각도로 돌려
+스크린샷을 찍고, 창을 닫으면 종료된다. 창이 안 뜨고
+`Authorization required, but no authorization protocol specified` 가 보이면
+호스트에서 `xhost +local:root` 를 안 한 것이다.
+
+### 5.6 한 번에 다 돌리기
+
+조건 네 개를 순서대로 돌리는 스크립트를 넣어 뒀다. Kit 기동이 조건마다 한 번씩
+들어가 10분 내외 걸린다.
+
+```bash
+bash tasks/sensor_fusion/run_all_conditions.sh
+```
+
+### 5.7 결과는 어디에
+
+```
+outputs/sensor_fusion/
+├── level_log.csv            조건별 전체 로그 (노션 표의 원본)
+├── level_d0.90.png          RGB / Depth / IMU 보정 높이 / 융합 마스크 4패널
+├── level_d0.90.npz          원본 텐서 (depth, height, mask, rgb, intrinsics, IMU)
+├── pitch20_log.csv
+├── pitch20_d0.90.png
+└── ...
+```
+
+레포가 bind mount 라서 **호스트 레포의 같은 경로에 그대로 있다.** 노션에는 PNG 를
+올리고, CSV 는 표로 옮기거나 파일째 첨부한다.
+
+`.npz` 를 다시 그리거나 임계값을 바꿔 재계산하려면 (Kit 불필요):
+
+```python
+import numpy as np
+d = np.load("outputs/sensor_fusion/pitch20_d0.70.npz")
+print(d["depth"].shape, d["projected_gravity_b"], d["lin_acc_b"])
+```
+
+### 5.8 다른 터미널에서 VRAM 보기
+
+8 GB 에서 돌리는 중이니 한 번쯤 봐 두면 좋다. **호스트에서** 새 터미널을 열고:
+
+```bash
+watch -n 2 nvidia-smi
+```
+
+여유가 없으면 이 순서로 줄인다:
+
+```bash
+--no_rgb                                  # RGB 끄기 (제일 효과 큼)
+--cam_width 96 --cam_height 72            # 해상도 줄이기
+# --gui 를 빼고 헤드리스로 (GUI 렌더러가 3~4 GB 를 먼저 먹는다)
+```
+
+### 5.9 컨테이너를 나갔다 다시 들어올 때
+
+```bash
+exit                                                                    # 컨테이너 밖으로
+
+# 다시 들어가기 (호스트)
+docker compose -f docker/isaaclab/docker-compose.yml run --rm base
+
+# 컨테이너 안 — 이 두 줄만 다시
+source /opt/isaaclab-scripts/isaac-env.sh
+cd /workspace/rospider
+```
+
+`pip install` 한 것, 받아온 에셋, 변환한 USD, 결과물은 **전부 남아 있다**
+(앞의 둘은 도커 볼륨, 뒤의 둘은 레포 bind mount).
+
+### 5.10 체크포인트 — 여기까지 됐으면 다음으로
+
+| # | 명령 | 이게 보이면 통과 |
+|---|---|---|
+| 0 | `00_fetch_description.sh` | `메시 : 36 개` |
+| 1 | `01_xacro_to_urdf.py` | `revolute 29개` + `메시 파일 전부 존재` |
+| 2 | `urdf_fk.py` | `R_cam<-imu` 가 `fusion.py` 기본값과 일치 |
+| 3 | `test_fusion.py` | `전부 통과` |
+| 4 | `02_urdf_to_usd.py` | `[리짓바디 ...]` 에 `base_link` 가 있음 |
+| 4' | `02_urdf_to_usd.py --view` | 로봇이 바닥 위에 제대로 서 있음 |
+| 5 | `run_fusion_demo.py` | `[완료] 로그 ...csv` + PNG 생성 |
+| 6 | `--gui` 실행 | 스크린샷 확보 |
+
+0~3 은 Kit 이 없어도 되니, 설치가 아직 안 끝났어도 **지금 바로 돌려볼 수 있다.**
 
 ## 6. 파일별로, 왜 그 코드인가
 

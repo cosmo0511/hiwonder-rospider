@@ -50,13 +50,16 @@ Humble 의 apt `rclpy` 는 python 3.10 용이고 Isaac Sim 5.1 은 3.11 고정�
 | [tasks/sensor_fusion/README.md](tasks/sensor_fusion/README.md) | 커맨드 모음 |
 
 ```bash
-# 컨테이너 안, isaac-shell
+# 컨테이너 안에서 (매번 이 두 줄 -> 프롬프트에 (isaac_lab) 이 붙습니다)
+source /opt/isaaclab-scripts/isaac-env.sh
 cd /workspace/rospider
+
+pip install xacro matplotlib                        # 최초 1회
 bash tasks/sensor_fusion/00_fetch_description.sh    # RosPider URDF 받기
-pip install xacro && python tasks/sensor_fusion/01_xacro_to_urdf.py
+python tasks/sensor_fusion/01_xacro_to_urdf.py      # xacro -> URDF
 python tasks/sensor_fusion/test_fusion.py           # 융합 로직만 먼저 검증 (Kit 불필요)
-python tasks/sensor_fusion/02_urdf_to_usd.py        # URDF -> USD
-python tasks/sensor_fusion/run_fusion_demo.py --enable_cameras --pitch_deg 20
+python tasks/sensor_fusion/02_urdf_to_usd.py        # URDF -> USD (--view 로 눈 확인)
+bash tasks/sensor_fusion/run_all_conditions.sh      # 실험 조건 4개
 ```
 
 Kit 이 필요 없는 단계를 앞에 몰아놨습니다. 융합 로직은 `AppLauncher` 없이 테스트되므로
