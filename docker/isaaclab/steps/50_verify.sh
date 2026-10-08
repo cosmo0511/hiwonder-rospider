@@ -78,17 +78,24 @@ if [[ "${SKIP_SIM:-0}" == "1" ]]; then
 else
   info "첫 실행은 셰이더 컴파일로 5~10분 걸립니다. 로그가 멈춘 듯 보여도 정상입니다."
   info "최대 ${SIM_TIMEOUT:-1800}초까지 기다립니다."
-  if timeout "${SIM_TIMEOUT:-1800}" \
-       "${ISAACLAB_PATH}/isaaclab.sh" -p "$(pwd)/_smoke_sim.py" --headless --steps 60 \
-       2>&1 | tee "${STATE_DIR}/smoke_sim.log" | grep -qE "\[SMOKE-OK\]"; then
+  # grep -q 로 파이프를 받으면 화면에 아무것도 안 나와 멈춘 것처럼 보입니다.
+  # 진행 상황이 보여야 하므로 tee 까지만 걸고, 판정은 끝난 뒤 로그 파일로 합니다.
+  SMOKE_LOG="${STATE_DIR}/smoke_sim.log"
+  set +e
+  timeout "${SIM_TIMEOUT:-1800}" \
+    "${ISAACLAB_PATH}/isaaclab.sh" -p "$(pwd)/_smoke_sim.py" --headless --steps 60 \
+    2>&1 | tee "${SMOKE_LOG}"
+  rc=${PIPESTATUS[0]}
+  set -e
+
+  if grep -q "\[SMOKE-OK\]" "${SMOKE_LOG}" 2>/dev/null; then
     ok "Kit 기동 + 물리 60 스텝 완료"
+  elif [[ ${rc} -eq 124 ]]; then
+    bad "시간 초과 (${SIM_TIMEOUT:-1800}초)."
+    info "  셰이더 캐시가 비어 있으면 더 걸릴 수 있습니다: SIM_TIMEOUT=3600 으로 재시도"
+    fail=1
   else
-    rc=$?
-    if [[ ${rc} -eq 124 ]]; then
-      bad "시간 초과 (${SIM_TIMEOUT:-1800}초). 셰이더 컴파일이 더 필요하면 SIM_TIMEOUT 을 늘리세요."
-    else
-      bad "기동 실패 — 로그: ${STATE_DIR}/smoke_sim.log"
-    fi
+    bad "기동 실패 (종료코드 ${rc}) — 로그: ${SMOKE_LOG}"
     fail=1
   fi
 fi
