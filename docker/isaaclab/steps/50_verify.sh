@@ -69,27 +69,44 @@ else
   info "/opt/ros 가 없습니다. 건너갑니다."
 fi
 
-step "5. 헤드리스 기동"
+# GUI=1 이면 창을 띄웁니다. 기본은 헤드리스 — 검증은 사람 없이 끝나야 하고,
+# VRAM 8GB 급에서는 GUI 렌더러가 3~4GB 를 먼저 먹기 때문입니다.
+# GUI 를 쓰려면 호스트에서 먼저: xhost +local:root
+if [[ "${GUI:-0}" == "1" ]]; then
+  SMOKE_HEADLESS=""
+  SMOKE_STEPS="${SMOKE_STEPS:-2000}"   # 창이 깜빡이고 사라지지 않게 넉넉히
+else
+  SMOKE_HEADLESS="--headless"
+  SMOKE_STEPS="${SMOKE_STEPS:-60}"
+fi
+
+step "5. ${GUI:+GUI }기동"
 # 튜토리얼의 create_empty.py 는 무한 루프라 검증에 쓸 수 없습니다
 # (`while simulation_app.is_running(): sim.step()` — 사용자가 끄기 전까지 안 끝남).
 # 몇 스텝만 돌고 종료하는 _smoke_sim.py 를 씁니다.
 if [[ "${SKIP_SIM:-0}" == "1" ]]; then
   info "SKIP_SIM=1 — 건너갑니다"
 else
-  info "첫 실행은 셰이더 컴파일로 5~10분 걸립니다. 로그가 멈춘 듯 보여도 정상입니다."
-  info "최대 ${SIM_TIMEOUT:-1800}초까지 기다립니다."
+  info "첫 실행은 셰이더 컴파일로 5~10분 걸립니다."
+  info "최대 ${SIM_TIMEOUT:-1800}초까지 기다립니다. ${SMOKE_STEPS} 스텝."
+  if [[ "${GUI:-0}" == "1" ]]; then
+    info "GUI 모드 — 창이 안 뜨고 Authorization required 가 보이면"
+    info "  호스트에서: xhost +local:root"
+  else
+    info "창을 보려면:  GUI=1 bash $(basename "${BASH_SOURCE[0]}")"
+  fi
   # grep -q 로 파이프를 받으면 화면에 아무것도 안 나와 멈춘 것처럼 보입니다.
   # 진행 상황이 보여야 하므로 tee 까지만 걸고, 판정은 끝난 뒤 로그 파일로 합니다.
   SMOKE_LOG="${STATE_DIR}/smoke_sim.log"
   set +e
   timeout "${SIM_TIMEOUT:-1800}" \
-    "${ISAACLAB_PATH}/isaaclab.sh" -p "$(pwd)/_smoke_sim.py" --headless --steps 60 \
+    "${ISAACLAB_PATH}/isaaclab.sh" -p "$(pwd)/_smoke_sim.py" ${SMOKE_HEADLESS} --steps "${SMOKE_STEPS}" \
     2>&1 | tee "${SMOKE_LOG}"
   rc=${PIPESTATUS[0]}
   set -e
 
   if grep -q "\[SMOKE-OK\]" "${SMOKE_LOG}" 2>/dev/null; then
-    ok "Kit 기동 + 물리 60 스텝 완료"
+    ok "Kit 기동 + 물리 ${SMOKE_STEPS} 스텝 완료"
   elif [[ ${rc} -eq 124 ]]; then
     bad "시간 초과 (${SIM_TIMEOUT:-1800}초)."
     info "  셰이더 캐시가 비어 있으면 더 걸릴 수 있습니다: SIM_TIMEOUT=3600 으로 재시도"

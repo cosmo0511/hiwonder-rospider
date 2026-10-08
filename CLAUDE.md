@@ -141,6 +141,7 @@ from isaaclab.sensors import CameraCfg    # ← 이제부터 omni 의존 모듈 
 ```bash
 # 호스트 1회
 bash docker/isaaclab/host_setup.sh
+xhost +local:root                       # GUI 를 쓸 거면 필수
 
 # 컨테이너 빌드 & 진입
 docker compose -f docker/isaaclab/docker-compose.yml build base
@@ -149,7 +150,15 @@ docker compose -f docker/isaaclab/docker-compose.yml run --rm base
 # 컨테이너 안 — 설치(이미 돼 있으면 건너뜀)
 bash /opt/isaaclab-steps/run_all.sh
 bash /opt/isaaclab-steps/diag.sh        # 상태 점검, 아무것도 안 바꿈
+bash /opt/isaaclab-steps/50_verify.sh   # 검증 (헤드리스)
+GUI=1 bash /opt/isaaclab-steps/50_verify.sh   # 창을 띄워서 눈으로 확인
 ```
+
+GUI 는 기본이 꺼져 있습니다. 검증은 사람 없이 끝나야 하고, VRAM 8GB 에서는
+GUI 렌더러가 3~4GB 를 먼저 먹기 때문입니다. **다만 URDF 를 올리고 센서를 붙이는
+작업은 눈으로 봐야 하므로 GUI 를 쓰세요.** 창이 안 뜨고
+`Authorization required, but no authorization protocol specified` 가 보이면
+호스트에서 `xhost +local:root` 를 실행하지 않은 것입니다.
 
 - 레포는 컨테이너 안 **`/workspace/rospider`** 에 마운트됩니다
 - 설치는 docker named volume(`isaaclab_isaac-conda`, `isaaclab_isaac-lab`)에 있어
