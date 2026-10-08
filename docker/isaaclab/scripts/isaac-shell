@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Isaac Sim / Isaac Lab 전용 쉘 (conda isaac_lab, ROS 미소싱)
+#   isaac-shell                      -> 대화형 bash
+#   isaac-shell python -c "..."      -> 해당 명령만 실행
+source /opt/isaaclab-scripts/isaac-env.sh || true
+if [[ $# -eq 0 ]]; then
+  exec bash
+fi
+exec "$@"

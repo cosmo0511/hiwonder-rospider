@@ -1,0 +1,135 @@
+# Isaac Sim 5.1 + Isaac Lab 2.3.1 개발 컨테이너
+#
+#   docker compose build
+#   docker compose run --rm isaaclab          # 대화형 쉘
+#   docker compose run --rm isaaclab isaac-shell python -c "import torch; print(torch.cuda.is_available())"
+#
+# 호스트 준비물: NVIDIA 드라이버 580.65.06+, nvidia-container-toolkit, (GUI 쓸 때) xhost +local:root
+
+services:
+  isaaclab:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: full
+      args:
+        CUDA_IMAGE: nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04
+        PYTHON_VERSION: "3.11"
+        CONDA_ENV: isaac_lab
+        ISAACSIM_VERSION: 5.1.0
+        ISAACLAB_REF: v2.3.1
+        TORCH_VERSION: 2.7.0
+        TORCHVISION_VERSION: 0.22.0
+        ROS_DISTRO: humble
+    image: rospider/isaaclab:2.3.1
+    container_name: rospider-isaaclab
+
+    # DDS 디스커버리(멀티캐스트)가 호스트의 ROS 2 노드와 바로 통하게 하려면 host 네트워크가 가장 간단합니다.
+    # 격리가 필요하면 지우고 ports 로 8211/udp, 49100/tcp 만 여세요.
+    network_mode: host
+
+    stdin_open: true
+    tty: true
+    shm_size: "16gb"
+    ulimits:
+      memlock: -1
+      stack: 67108864
+
+    environment:
+      - DISPLAY=${DISPLAY:-:0}
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - OMNI_KIT_ACCEPT_EULA=YES
+      - ACCEPT_EULA=Y
+      - PRIVACY_CONSENT=Y
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+
+    volumes:
+      # 이 레포
+      - ../..:/workspace/rospider:rw
+      # GUI (X11)
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      # Omniverse 캐시 — 이걸 안 붙이면 컨테이너를 새로 띄울 때마다 셰이더/확장을 다시 받습니다
+      - isaac-cache-ov:/root/.cache/ov
+      - isaac-cache-pip:/root/.cache/pip
+      - isaac-cache-glcache:/root/.cache/nvidia/GLCache
+      - isaac-cache-computecache:/root/.nv/ComputeCache
+      - isaac-logs:/root/.nvidia-omniverse/logs
+      - isaac-data:/root/.local/share/ov/data
+      - isaac-docs:/root/Documents
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # ---------------------------------------------------------------------------
+  # 단계별 설치용 컨테이너. 시스템 패키지 + ROS 2 만 들어 있습니다(빌드 10분 내외).
+  # /opt/conda, /opt/IsaacLab 가 named volume 이라 컨테이너를 지워도 설치가 남습니다.
+  #
+  #   docker compose -f docker/isaaclab/docker-compose.yml build base
+  #   docker compose -f docker/isaaclab/docker-compose.yml run --rm base
+  #   (컨테이너 안에서) bash /opt/isaaclab-steps/00_preflight.sh
+  # ---------------------------------------------------------------------------
+  base:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: base
+      args:
+        CUDA_IMAGE: nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04
+        ROS_DISTRO: humble
+    image: rospider/isaaclab:base
+    container_name: rospider-isaaclab-base
+    network_mode: host
+    stdin_open: true
+    tty: true
+    shm_size: "16gb"
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    environment:
+      - DISPLAY=${DISPLAY:-:0}
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - OMNI_KIT_ACCEPT_EULA=YES
+      - ACCEPT_EULA=Y
+      - PRIVACY_CONSENT=Y
+    volumes:
+      - ../..:/workspace/rospider:rw
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      # ★ 설치 결과가 여기 남습니다. 컨테이너를 --rm 으로 지워도 유지됩니다.
+      - isaac-conda:/opt/conda
+      - isaac-lab:/opt/IsaacLab
+      - isaac-state:/opt/.isaac-setup-state
+      # Omniverse 캐시
+      - isaac-cache-ov:/root/.cache/ov
+      - isaac-cache-pip:/root/.cache/pip
+      - isaac-cache-glcache:/root/.cache/nvidia/GLCache
+      - isaac-cache-computecache:/root/.nv/ComputeCache
+      - isaac-logs:/root/.nvidia-omniverse/logs
+      - isaac-data:/root/.local/share/ov/data
+      - isaac-docs:/root/Documents
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  isaac-conda:
+  isaac-lab:
+  isaac-state:
+  isaac-cache-ov:
+  isaac-cache-pip:
+  isaac-cache-glcache:
+  isaac-cache-computecache:
+  isaac-logs:
+  isaac-data:
+  isaac-docs:

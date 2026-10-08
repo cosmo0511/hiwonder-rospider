@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# ROS 2 Humble 전용 쉘 (시스템 python 3.10, conda 비활성)
+#   ros-shell                 -> 대화형 bash
+#   ros-shell ros2 topic list -> 해당 명령만 실행
+source /opt/isaaclab-scripts/ros-env.sh || true
+if [[ $# -eq 0 ]]; then
+  exec bash
+fi
+exec "$@"
