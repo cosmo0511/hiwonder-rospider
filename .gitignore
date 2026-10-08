@@ -1,0 +1,10 @@
+# 로봇 에셋. 00_fetch_description.sh 로 받아오고, Hiwonder 저작물이라 커밋하지 않는다.
+assets/
+
+# 시뮬레이션 산출물 (CSV / PNG / NPZ)
+outputs/
+
+# 파이썬
+__pycache__/
+*.py[cod]
+.venv/

@@ -42,8 +42,32 @@ Humble 의 apt `rclpy` 는 python 3.10 용이고 Isaac Sim 5.1 은 3.11 고정�
 **2. RTX 4060 (8GB) 는 공식 최소(RTX 4080 16GB) 아래입니다.**
 돌아가지만 학습은 `--headless` 필수, `--num_envs` 는 64 부터 올려가며 한계를 찾으세요.
 
+## 센서 융합 과제 (뎁스 카메라 + IMU)
+
+| | |
+|---|---|
+| **[docs/sensor_fusion_manual.md](docs/sensor_fusion_manual.md)** | **매뉴얼.** 시나리오, 좌표계·단위, 융합 수식, 실험 조건, 함정, 노션 노트 작성 항목까지 |
+| [tasks/sensor_fusion/README.md](tasks/sensor_fusion/README.md) | 커맨드 모음 |
+
+```bash
+# 컨테이너 안, isaac-shell
+cd /workspace/rospider
+bash tasks/sensor_fusion/00_fetch_description.sh    # RosPider URDF 받기
+pip install xacro && python tasks/sensor_fusion/01_xacro_to_urdf.py
+python tasks/sensor_fusion/test_fusion.py           # 융합 로직만 먼저 검증 (Kit 불필요)
+python tasks/sensor_fusion/02_urdf_to_usd.py        # URDF -> USD
+python tasks/sensor_fusion/run_fusion_demo.py --enable_cameras --pitch_deg 20
+```
+
+Kit 이 필요 없는 단계를 앞에 몰아놨습니다. 융합 로직은 `AppLauncher` 없이 테스트되므로
+문제가 생겼을 때 시뮬레이터 탓인지 로직 탓인지 바로 갈립니다.
+
 ## 검증 상태
 
 RTX 4060 노트북 + Ubuntu 24.04 호스트에서 설치를 끝까지 돌리며 다듬었습니다.
 `00_preflight` ~ `40_isaaclab` 통과, Kit 기동(GPU 인식, Vulkan)까지 확인했습니다.
 `50_verify` 의 유한 스텝 검증은 아직 완주 기록이 없습니다.
+
+센서 융합 쪽은 Kit 없이 도는 부분(xacro 전개, 외부 파라미터 계산, 융합 로직 7개 조건)만
+실행 검증했습니다. Isaac Sim 안에서 끝까지 돌려본 기록은 아직 없습니다 —
+자세한 구분은 [매뉴얼 0절](docs/sensor_fusion_manual.md#0-먼저-무엇이-확인된-사실인가).
