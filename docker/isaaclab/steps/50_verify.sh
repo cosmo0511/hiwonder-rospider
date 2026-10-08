@@ -17,9 +17,30 @@ assert torch.__version__.startswith(os.environ["TORCH_VERSION"]), torch.__versio
 assert torch.version.cuda == os.environ["EXPECTED_TORCH_CUDA"], torch.version.cuda
 PY
 
-step "2. import"
-python -c "import isaacsim" 2>/dev/null && ok "isaacsim" || { bad "isaacsim"; fail=1; }
-python -c "import isaaclab, isaaclab_tasks" 2>/dev/null && ok "isaaclab, isaaclab_tasks" || { bad "isaaclab"; fail=1; }
+step "2. 설치 여부 / import"
+# isaaclab_tasks / isaaclab.envs / isaaclab.sim 은 omni.* 를 쓰고, omni 는 Kit 앱이
+# 뜨면서 주입됩니다. 맨 파이썬에서 import 하면 설치가 멀쩡해도 실패합니다.
+# 그래서 설치 여부는 메타데이터로, import 는 Kit 없이도 되는 것만 확인합니다.
+# 실제 기동 검증은 아래 5번(_smoke_sim.py)이 담당합니다.
+python - <<'PY'
+import importlib.metadata as md
+import sys
+missing = []
+for d in ("isaacsim", "isaaclab", "isaaclab_assets", "isaaclab_tasks",
+          "isaaclab_rl", "isaaclab_mimic"):
+    try:
+        print(f"       {d:<18} {md.version(d)}")
+    except md.PackageNotFoundError:
+        print(f"       {d:<18} 설치 안 됨")
+        missing.append(d)
+sys.exit(1 if missing else 0)
+PY
+[[ $? -eq 0 ]] && ok "6개 패키지 설치됨" || { bad "설치되지 않은 패키지가 있습니다"; fail=1; }
+python -c "import isaacsim" 2>/dev/null && ok "import isaacsim" || { bad "import isaacsim"; fail=1; }
+python -c "import isaaclab" 2>/dev/null && ok "import isaaclab" || { bad "import isaaclab"; fail=1; }
+python -c "from isaaclab.app import AppLauncher" 2>/dev/null \
+  && ok "import isaaclab.app (AppLauncher)" || { bad "import isaaclab.app"; fail=1; }
+info "isaaclab_tasks 등은 Kit 이 떠야 import 됩니다 — 5번에서 확인합니다."
 
 step "3. 내부 ROS 2 ${ROS_DISTRO:-humble} 라이브러리"
 if [[ -f /opt/isaaclab-scripts/isaac-env.sh ]]; then
