@@ -20,7 +20,7 @@
 |---|---|
 | GPU | **RTX 4060 Laptop, VRAM 8188 MiB** |
 | CPU / RAM | Ryzen 7 8845HS (8C/16T) / **15227 MiB** + 스왑 28671 MiB |
-| 드라이버 | 580.173.02 |
+| 드라이버 | **580.178.04** (CUDA 13.0 보고). 2026-10-09 자동 업데이트로 580.173.02 에서 올라감 |
 | 호스트 OS | Ubuntu 24.04 (컨테이너 안은 22.04) |
 
 **공식 최소 사양(RTX 4080 16GB, RAM 32GB) 아래입니다.** 돌아가지만:
@@ -86,6 +86,10 @@ ros2 브리지가 품은 **내부 Humble 라이브러리**를 쓰고, `isaac-env
 | 컨테이너가 바로 종료 | `set -e` 에서 **실패하는 명령치환 대입**은 그 자리에서 쉘을 죽입니다. 환경 준비 스크립트에는 `set -e` 를 쓰지 말 것 |
 | 스크립트가 안 끝남 | 튜토리얼 `create_empty.py` 는 `while simulation_app.is_running(): sim.step()` **무한 루프**입니다. 검증에는 `steps/_smoke_sim.py`(유한 스텝) 사용 |
 | `Authorization required, but no authorization protocol specified` | X11 권한. 호스트에서 `xhost +local:root` |
+| `nvidia-smi` 가 `Driver/library version mismatch` | 돌아가는 중에 자동 업데이트가 NVIDIA 드라이버를 올렸다. 커널 모듈은 옛 버전, 라이브러리는 새 버전. 재부팅하면 보통 풀린다 |
+| 재부팅했더니 `NVIDIA-SMI has failed because it couldn't communicate with the NVIDIA driver` | 커널까지 같이 올라갔는데 그 커널용 NVIDIA 모듈 설정이 실패한 상태다. 실제로 밟은 사례: **`linux-headers-<커널>` 이 설치돼 있지 않아** 모듈 postinst 가 `tools/objtool/objtool` 을 못 찾고 죽었고, 그 하나 때문에 `nvidia-driver-580` 까지 `iU`(미설정)로 남았다. → `sudo apt update && sudo apt install linux-headers-$(uname -r) linux-headers-generic-hwe-24.04 && sudo dpkg --configure -a` 후 재부팅. `dpkg -l | grep nvidia` 가 전부 `ii` 여야 한다 |
+| `docker compose run` 이 `open /run/nvidia-persistenced/socket: no such file or directory` | 위와 같은 뿌리. 드라이버가 깨지면 `nvidia-persistenced` 가 죽어 소켓이 사라진다. 먼저 `nvidia-smi` 를 확인할 것 |
+| Isaac Lab 이 `Failed to create articulation at: .../root_joint` | 설정을 의심하기 전에 **호스트 `nvidia-smi` 부터** 확인하자. 드라이버가 깨져 있으면 PhysX GPU 초기화 실패가 이 메시지로 나타난다 |
 
 ## 다음 작업에 쓸 API (v2.3.1 소스에서 확인함)
 
