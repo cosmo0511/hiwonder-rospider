@@ -105,11 +105,13 @@ parser.add_argument("--out", default="outputs/sensor_fusion", help="결과(CSV/P
 parser.add_argument("--tag", default="run", help="결과 파일 이름에 붙일 꼬리표")
 parser.add_argument("--gui", action="store_true", help="창을 띄운다")
 parser.add_argument(
-    "--no_imu_arrow",
+    "--imu_arrow",
     action="store_true",
-    help="GUI 에서 IMU 가속도 화살표 마커를 끈다. 이 마커는 콘솔에 "
-    "'FabricManager::initializePointInstancer mismatched prototypes ... /Visuals/Command/velocity_goal' "
-    "경고를 남긴다(무해하지만 거슬리면 끄자).",
+    help="GUI 에 IMU 가속도 화살표 마커를 그린다. **기본은 꺼짐.** "
+    "gravity_bias=(0,0,0) 이라 정지 상태에서는 가속도가 0 이고, 그러면 화살표가 "
+    "길이 0 또는 엉뚱한 방향으로 공중에 떠 보인다. 콘솔에 "
+    "'FabricManager::initializePointInstancer mismatched prototypes' 경고도 남긴다. "
+    "몸체를 흔드는 --motion rock 에서만 의미가 있다.",
 )
 parser.add_argument("--dump_asset_info", action="store_true", help="바디/조인트 이름만 찍고 종료")
 parser.add_argument(
@@ -267,7 +269,7 @@ def main() -> None:
         cam_height=args_cli.cam_height,
         with_rgb=not args_cli.no_rgb,
         num_envs=1,
-        debug_vis=args_cli.gui and not args_cli.no_imu_arrow,
+        debug_vis=args_cli.gui and args_cli.imu_arrow,
         scene=args_cli.scene,
         base_body=args_cli.base_body,
         arm_body=args_cli.arm_body,
@@ -384,14 +386,22 @@ def main() -> None:
             title,
         )
 
+    # 계단 씬에서는 빨간 상자를 멀리 치워 두었다(build_scene_cfg). 거리 스윕이 그걸
+    # 다시 로봇 앞으로 끌어오면 계단과 상자가 겹쳐 보여 헷갈린다. 그래서 box 씬에서만
+    # 상자를 옮기고, 계단 씬은 한 조건만 돌린다.
+    move_obstacle = args_cli.scene == "box"
+    if not move_obstacle:
+        dists = dists[:1]
+
     if not moving:
         # ---------------- (A) 정지 스윕 ----------------
         for dist in dists:
-            state = obstacle_state.clone()
-            state[:, 0] = cam_x_world + dist + 0.1
-            state[:, :3] += scene.env_origins
-            obstacle.write_root_pose_to_sim(state[:, :7])
-            obstacle.write_root_velocity_to_sim(torch.zeros_like(state[:, 7:]))
+            if move_obstacle:
+                state = obstacle_state.clone()
+                state[:, 0] = cam_x_world + dist + 0.1
+                state[:, :3] += scene.env_origins
+                obstacle.write_root_pose_to_sim(state[:, :7])
+                obstacle.write_root_velocity_to_sim(torch.zeros_like(state[:, 7:]))
 
             for step in range(args_cli.settle_steps + args_cli.sample_steps):
                 robot.set_joint_position_target(hold_target)
@@ -428,11 +438,12 @@ def main() -> None:
     else:
         # ---------------- (B) 모션 ----------------
         dist = dists[0]
-        state = obstacle_state.clone()
-        state[:, 0] = cam_x_world + dist + 0.1
-        state[:, :3] += scene.env_origins
-        obstacle.write_root_pose_to_sim(state[:, :7])
-        obstacle.write_root_velocity_to_sim(torch.zeros_like(state[:, 7:]))
+        if move_obstacle:
+            state = obstacle_state.clone()
+            state[:, 0] = cam_x_world + dist + 0.1
+            state[:, :3] += scene.env_origins
+            obstacle.write_root_pose_to_sim(state[:, :7])
+            obstacle.write_root_velocity_to_sim(torch.zeros_like(state[:, 7:]))
 
         n_steps = int(args_cli.motion_seconds / sim_dt)
         print(f"[모션] {args_cli.motion}, {args_cli.motion_seconds}s ({n_steps} 스텝), "
