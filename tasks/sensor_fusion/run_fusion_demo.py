@@ -144,6 +144,7 @@ from isaaclab.scene import InteractiveScene  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from extrinsics import ArmCameraExtrinsics  # noqa: E402
+from kit_exit import shutdown  # noqa: E402
 from fusion import DECISION_NAMES, FusionParams, fuse  # noqa: E402
 from rospider_cfg import ARM_OBSERVE_POSE, build_scene_cfg, pitch_to_quat  # noqa: E402
 
@@ -533,5 +534,14 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
-    simulation_app.close()
+    import traceback
+
+    _code = 0
+    try:
+        main()
+    except Exception:
+        traceback.print_exc()
+        _code = 1
+    # 예외가 나면 Kit 종료가 플러그인 언로드에서 매달린다. Ctrl+C 도 안 듣는다.
+    # 워치독을 걸어 확실히 끝낸다(kit_exit.py 참고).
+    shutdown(simulation_app, _code)
