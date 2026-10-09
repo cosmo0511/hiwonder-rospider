@@ -49,10 +49,12 @@ parser.add_argument(
 )
 parser.add_argument(
     "--root-link",
-    default="base_link",
-    help="어떤 링크를 아티큘레이션 루트로 삼을지. 빈 문자열('')이면 URDF 의 자연스러운 "
-    "루트(base_footprint)를 쓴다. "
-    "'Failed to create articulation' 가 나면 여기부터 '' 로 바꿔 보자.",
+    default="",
+    help="어떤 링크를 아티큘레이션 루트로 삼을지. **기본은 빈 문자열** = URDF 의 자연스러운 "
+    "루트(base_footprint)를 그대로 쓴다. "
+    "여기에 이름을 넣으면 임포터가 트리를 다시 뿌리내리는데, merge_fixed_joints 가 그 링크를 "
+    "없애 버리면 root_joint 가 사라진 prim 을 가리켜 아티큘레이션이 통째로 안 만들어진다. "
+    "실제로 'base_link' 를 넣었다가 그 함정을 밟았다(아래 주석 참고).",
 )
 parser.add_argument(
     "--fix-base",
@@ -169,11 +171,15 @@ def convert() -> Path:
         # 로봇이 서 있고, 자세(기울기)를 우리가 원하는 값으로 정확히 줄 수 있다.
         # 보행까지 가려면 False 로 바꾸고 다리 PD 게인부터 다시 잡아야 한다.
         fix_base=args_cli.fix_base,
-        # URDF 의 루트는 base_footprint(더미) 다. base_link 를 루트로 지정하면 merge 후에도
-        # prim 이름이 base_link 로 남아 센서 경로를 적기 편하다. 다만 이렇게 트리를
-        # 다시 뿌리내리면 임포터가 만드는 root_joint 가 꼬일 수 있다
-        # ("Failed to create articulation at: .../root_joint").
-        # 그때는 --root-link '' 로 두고, 바뀐 바디 이름을 --base_body 로 넘기면 된다.
+        # **여기에 링크 이름을 넣지 말 것(기본 None).**
+        # 한때 "merge 후에도 prim 이름을 base_link 로 남기자"는 생각에 'base_link' 를
+        # 넣었는데, merge_fixed_joints=True 가 base_link 를 base_footprint 안으로 합쳐
+        # 버린다. 그러면 임포터가 만든 root_joint 가 사라진 prim 을 가리키고, PhysX 가
+        #   [Error] Joint (.../root_joint) body relationship .../base_link points to a
+        #           non existent prim, joint will not be created.
+        # 를 낸 뒤 아티큘레이션이 통째로 안 만들어진다. 겉보기엔
+        #   RuntimeError: Failed to create articulation at: .../root_joint
+        # 로만 보여서 원인을 찾기 어렵다.
         root_link_name=args_cli.root_link or None,
         merge_fixed_joints=args_cli.merge_fixed_joints,
         # STL 은 visual 과 collision 이 같은 파일이다. convex hull 로 단순화하면

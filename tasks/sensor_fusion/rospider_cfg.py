@@ -202,7 +202,7 @@ def make_camera_cfg(
 
 def make_imu_cfg(
     debug_vis: bool = False,
-    base_body: str = "base_link",
+    base_body: str = "base_footprint",
     pos: tuple[float, float, float] = IMU_POS_IN_BASE,
 ) -> ImuCfg:
     """IMU.
@@ -302,7 +302,7 @@ def build_scene_cfg(
     num_envs: int = 1,
     debug_vis: bool = False,
     scene: str = "box",
-    base_body: str = "base_link",
+    base_body: str = "base_footprint",
     arm_body: str = "link4",
     articulation_root: str | None = None,
 ) -> FusionSceneCfg:
@@ -313,8 +313,10 @@ def build_scene_cfg(
             base 기준 x 는 여기에 카메라 오프셋을 더한 값이 된다.
         obstacle_height: 장애물 높이 [m]. 0.02 처럼 낮게 주면 '넘어갈 수 있는 단차' 가
             되고, 융합은 이걸 장애물로 세지 않아야 한다.
-        base_body: IMU 를 붙일 리짓바디 이름. 변환 설정에 따라 base_link 가 아니라
-            base_footprint 로 합쳐질 수 있다. `02_urdf_to_usd.py --inspect` 로 확인한다.
+        base_body: IMU 를 붙일 리짓바디 이름. **기본은 base_footprint** 다.
+            merge_fixed_joints=True 로 변환하면 base_link 가 base_footprint 안으로
+            흡수돼 prim 이 남지 않는다. `02_urdf_to_usd.py --inspect` 로 실제 이름을
+            확인할 수 있다.
         arm_body: 카메라를 붙일 리짓바디 이름(기본 link4).
         scene: 무엇을 놓을지.
             - ``"box"``   : 빨간 상자 하나(움직일 수 있다). 거리 스윕 실험용.

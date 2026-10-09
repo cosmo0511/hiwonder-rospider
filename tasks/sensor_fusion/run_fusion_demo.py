@@ -114,7 +114,7 @@ parser.add_argument(
 parser.add_argument("--dump_asset_info", action="store_true", help="바디/조인트 이름만 찍고 종료")
 parser.add_argument(
     "--base_body",
-    default="base_link",
+    default="base_footprint",
     help="IMU 를 붙일 리짓바디 이름. `02_urdf_to_usd.py --inspect` 가 찍어 주는 목록에서 고른다.",
 )
 parser.add_argument("--arm_body", default="link4", help="카메라를 붙일 리짓바디 이름")
