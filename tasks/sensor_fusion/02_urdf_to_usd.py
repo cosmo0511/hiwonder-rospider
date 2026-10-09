@@ -86,50 +86,11 @@ args_cli = parser.parse_args()
 # `--view` 일 때만 창을 띄운다.
 args_cli.headless = not args_cli.view
 
-# --inspect 는 USD 파일만 읽는다. pxr(USD 라이브러리)은 Kit 없이도 import 되므로
-# **앱을 띄우지 않는다.** 덕분에 몇 초 만에 끝나고, Kit 종료가 매달리는 문제도 없다.
+# --inspect 는 변환 없이 USD 구조만 본다. 다만 `pxr` 은 **Kit 런타임 안에만** 있어서
+# (isaacsim 의 pip 설치본은 SimulationApp 인스턴스화 뒤에만 omni/pxr 을 노출한다)
+# 앱은 띄워야 한다. 대신 항상 헤드리스로 띄우고, 변환은 건너뛴다.
 if args_cli.inspect:
-    import sys
-
-    from pxr import Usd, UsdPhysics  # noqa: E402
-
-    def _usd_name_inspect() -> str:
-        if args_cli.usd_name != "rospider.usd":
-            return args_cli.usd_name
-        return "rospider.usd" if args_cli.fix_base else "rospider_float.usd"
-
-    target = Path(args_cli.usd_dir) / _usd_name_inspect()
-    if not target.exists():
-        sys.exit(f"{target} 가 없습니다. 먼저 --inspect 없이 돌려 변환하세요.")
-
-    stage = Usd.Stage.Open(str(target))
-    bodies, joints, fixed, roots = [], [], [], []
-    for prim in stage.Traverse():
-        if prim.HasAPI(UsdPhysics.ArticulationRootAPI):
-            roots.append(prim.GetPath().pathString)
-        if prim.HasAPI(UsdPhysics.RigidBodyAPI):
-            bodies.append(prim.GetName())
-        if prim.IsA(UsdPhysics.Joint):
-            (fixed if prim.IsA(UsdPhysics.FixedJoint) else joints).append(prim.GetName())
-
-    default_prim = stage.GetDefaultPrim()
-    print(f"[검사] {target}")
-    print(f"\n[기본 prim] {default_prim.GetPath() if default_prim else '(없음)'}")
-    print(f"\n[아티큘레이션 루트 {len(roots)}개] {roots or '(없음!)'}")
-    if len(roots) != 1:
-        print(
-            "  ** Isaac Lab 은 ArticulationRootAPI 가 붙은 prim 이 정확히 하나여야 한다. **\n"
-            "     0개면 변환이 잘못된 것이고, 2개 이상이면 어느 쪽을 쓸지 몰라 실패한다."
-        )
-    print(f"\n[리짓바디 {len(bodies)}개] {', '.join(sorted(bodies))}")
-    print(f"\n[움직이는 조인트 {len(joints)}개] {', '.join(sorted(joints))}")
-    print(f"\n[고정 조인트 {len(fixed)}개] {', '.join(sorted(fixed))}")
-    print(
-        "\n센서 prim 경로는 위 리짓바디 이름에서 고른다."
-        " base_link 와 link4 가 보이면 rospider_cfg.py 기본값이 맞다."
-        " 다르면 run_fusion_demo.py 에 --base_body / --arm_body 로 넘기면 된다."
-    )
-    sys.exit(0)
+    args_cli.headless = True
 
 # ---- 여기서 Kit 이 뜬다. 이 줄 위에서는 omni.* 를 import 할 수 없다. ----
 app_launcher = AppLauncher(args_cli)
@@ -243,6 +204,14 @@ def report(usd_path: Path) -> None:
 
 
 def main() -> None:
+    if args_cli.inspect:
+        target = Path(args_cli.usd_dir) / _usd_name()
+        if not target.exists():
+            raise SystemExit(f"{target} 가 없습니다. 먼저 --inspect 없이 돌려 변환하세요.")
+        print(f"\n[검사] {target}")
+        report(target)
+        return
+
     usd_path = convert()
     report(usd_path)
 
