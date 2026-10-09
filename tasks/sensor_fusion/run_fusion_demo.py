@@ -104,6 +104,13 @@ parser.add_argument("--floor_mode", choices=["estimated", "assumed_height"], def
 parser.add_argument("--out", default="outputs/sensor_fusion", help="결과(CSV/PNG/GIF/NPZ) 디렉터리")
 parser.add_argument("--tag", default="run", help="결과 파일 이름에 붙일 꼬리표")
 parser.add_argument("--gui", action="store_true", help="창을 띄운다")
+parser.add_argument(
+    "--no_imu_arrow",
+    action="store_true",
+    help="GUI 에서 IMU 가속도 화살표 마커를 끈다. 이 마커는 콘솔에 "
+    "'FabricManager::initializePointInstancer mismatched prototypes ... /Visuals/Command/velocity_goal' "
+    "경고를 남긴다(무해하지만 거슬리면 끄자).",
+)
 parser.add_argument("--dump_asset_info", action="store_true", help="바디/조인트 이름만 찍고 종료")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -246,7 +253,7 @@ def main() -> None:
         cam_height=args_cli.cam_height,
         with_rgb=not args_cli.no_rgb,
         num_envs=1,
-        debug_vis=args_cli.gui,
+        debug_vis=args_cli.gui and not args_cli.no_imu_arrow,
         scene=args_cli.scene,
     )
     scene = InteractiveScene(scene_cfg)

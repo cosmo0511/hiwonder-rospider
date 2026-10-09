@@ -533,6 +533,41 @@ python tasks/sensor_fusion/run_fusion_demo.py --enable_cameras --gui --scene mix
 
 패널 생성에 실패해도 시뮬레이션은 계속 돈다(콘솔에 이유가 찍힌다).
 
+#### 5.5.2 "Isaac Sim is not responding" 창이 뜰 때
+
+**그냥 냅두면 된다. 계속 돌아간다.**
+
+그 창은 Isaac Sim 이 띄운 게 아니라 **우분투 창 관리자(GNOME)** 가 띄운 것이다. 앱이
+몇 초간 화면 갱신 요청에 응답하지 않으면 자동으로 뜨는데, Kit 은 셰이더 컴파일과 USD
+로딩 중에 UI 스레드를 붙잡기 때문에 **정상 동작 중에도 뜬다.**
+
+| 버튼 | 결과 |
+|---|---|
+| 아무것도 안 누름 | 그대로 계속 진행된다 ← 이게 정답 |
+| **Wait** | 창만 닫힌다. 또 뜰 수 있다. 눌러도 되고 안 눌러도 된다 |
+| **Force Quit** | 프로세스가 죽는다. **누르지 말 것** |
+
+**살아 있는지는 터미널에서 판단한다.** 창이 멈춰 보여도 터미널에는 로그가 계속 찍힌다.
+Stage 패널이 비어 있으면 아직 씬을 만드는 중이다.
+
+첫 실행을 줄이는 방법:
+
+```bash
+# ① 같은 씬을 헤드리스로 한 번 돌려 셰이더 캐시(isaac-cache-ov 볼륨)를 채운다
+python tasks/sensor_fusion/run_fusion_demo.py --enable_cameras --scene stairs --tag warmup
+
+# ② 그 다음 GUI. 두 번째부터는 훨씬 빠르다
+python tasks/sensor_fusion/run_fusion_demo.py --enable_cameras --gui --scene stairs \
+       --rendering_mode performance
+```
+
+`--rendering_mode` 는 AppLauncher 가 제공하는 인자로 `performance` / `balanced`(기본) /
+`quality` 중 고른다. **VRAM 8 GB 에서는 `performance` 를 쓰자.**
+
+콘솔에 `FabricManager::initializePointInstancer mismatched prototypes on point instancer:
+/Visuals/Command/velocity_goal` 가 보이면 IMU 디버그 화살표 마커 때문이다. 무해하지만
+거슬리면 `--no_imu_arrow` 로 끈다.
+
 #### 6단계 — 스크린샷용 GUI 실행
 
 노션 노트에 넣을 "장면 스크린샷" 은 여기서 찍는다.
@@ -858,6 +893,9 @@ prim 이 **RigidBody 여야** 하므로(`UsdPhysics.RigidBodyAPI` 를 확인한�
 | `No module named 'isaaclab'` | `isaaclab.sh -i` 가 실패를 종료코드에 안 싣는다. `bash /opt/isaaclab-steps/diag.sh` |
 | VRAM OOM / 느림 | `--cam_width 96 --cam_height 72 --no_rgb`, `num_envs=1`, `--gui` 끄기 |
 | `LLVM ERROR: out of memory` | VRAM 이 아니라 **시스템 RAM** 이다 |
+| `"Isaac Sim 5.1.0" is not responding` 창 | **정상이다. 그냥 냅두면 계속 돌아간다.** GNOME 이 띄운 창이고, Kit 은 셰이더 컴파일 중 UI 스레드를 붙잡는다. Force Quit 만 누르지 말 것. 5.5.2절 |
+| 첫 GUI 실행이 10분 넘게 걸린다 | 헤드리스로 먼저 한 번 돌려 셰이더 캐시를 채우고, `--rendering_mode performance` 를 쓴다. 5.5.2절 |
+| `FabricManager::initializePointInstancer mismatched prototypes` | IMU 디버그 화살표 마커. 무해하다. `--no_imu_arrow` 로 끌 수 있다 |
 | 창이 안 뜬다 | 대부분 정상이다. `--view` / `--gui` 를 붙여야 뜬다. 5.4.1절의 표를 보자 |
 | `--view`/`--gui` 를 붙였는데도 안 뜬다 | 5.4.2절의 X11 점검 순서 |
 | 창이 안 뜨고 `Authorization required...` | 호스트에서 `xhost +local:root`. **컨테이너를 띄우기 전에** 해야 한다 |
