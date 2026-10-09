@@ -891,7 +891,9 @@ prim 이 **RigidBody 여야** 하므로(`UsdPhysics.RigidBodyAPI` 를 확인한�
 |---|---|
 | `No module named 'ament_index_python'` (xacro 전개 중) | include 가 치환 안 된 원본을 다시 읽었다. `01_xacro_to_urdf.py` 가 `$(find ...)/urdf/` 를 임시 디렉터리로 돌리는 부분을 건드리지 말 것 |
 | `Failed to find a prim at path expression: .../imu_link` | `merge_fixed_joints=True` 로 흡수됐다. `base_link` 에 붙이고 `OffsetCfg` 를 주거나 `--no-merge-fixed-joints` 로 변환 |
-| `RuntimeError: Failed to create articulation at: .../Robot/root_joint` | USD 는 멀쩡히 열리는데(GUI 로 로봇이 보이는데) Isaac Lab 이 PhysX 아티큘레이션을 못 만든 것이다. 순서대로: ① `python tasks/sensor_fusion/02_urdf_to_usd.py --inspect` 로 ArticulationRootAPI 가 **정확히 하나**인지, 바디 이름이 무엇인지 확인 ② 터미널에서 traceback **위쪽**의 PhysX/`[Error]` 줄을 찾는다(진짜 이유가 거기 있다) ③ `--root-link ''` 로 다시 변환해 본다(아래 설명) |
+| `Failed to initialize NVML: Driver/library version mismatch` | **실행 중에 NVIDIA 드라이버가 업데이트됐다.** 커널에 올라간 모듈은 옛 버전, 설치된 라이브러리는 새 버전이라 안 맞는다. 자동 업데이트가 깔아 놓는 일이 흔하다. **재부팅**이 가장 확실하다 (`sudo reboot`). 재부팅 후 `nvidia-smi` 가 정상인지 먼저 확인할 것 |
+| `failed to fulfil mount request: open /run/nvidia-persistenced/socket: no such file or directory` (docker compose run) | 위와 같은 뿌리인 경우가 많다. 드라이버가 깨지면 `nvidia-persistenced` 가 죽고 소켓이 사라진다. 먼저 `nvidia-smi` 를 쳐 보고, mismatch 면 재부팅. 드라이버가 멀쩡한데 소켓만 없으면 `sudo systemctl start nvidia-persistenced` |
+| `RuntimeError: Failed to create articulation at: .../Robot/root_joint` | USD 는 멀쩡히 열리는데(GUI 로 로봇이 보이는데) Isaac Lab 이 PhysX 아티큘레이션을 못 만든 것이다. **⓪ 먼저 호스트에서 `nvidia-smi` 를 쳐 보자** — 드라이버가 깨져 있으면(위 두 줄) PhysX GPU 초기화가 실패해 이 에러로 나타난다. 설정을 바꾸기 전에 이것부터 배제할 것. 드라이버가 멀쩡하면: ① `python tasks/sensor_fusion/02_urdf_to_usd.py --inspect` 로 ArticulationRootAPI 가 **정확히 하나**인지, 바디 이름이 무엇인지 확인 ② 터미널에서 traceback **위쪽**의 PhysX/`[Error]` 줄을 찾는다(진짜 이유가 거기 있다) ③ `--root-link ''` 로 다시 변환해 본다(아래 설명) |
 | 위 오류가 `--root-link ''` 로 고쳐진 경우 | 루트 링크를 base_link 로 다시 뿌리내린 것이 임포터의 `root_joint` 와 꼬였던 것이다. 그러면 바디 이름이 `base_footprint` 로 바뀌므로 `run_fusion_demo.py --base_body base_footprint` 로 넘긴다 |
 | `Failed to find a RigidBodyAPI for the prim paths` | `Imu` 를 더미/비강체 prim 에 걸었다. 강체 prim 에 걸어야 한다 |
 | 뎁스가 전부 `inf` | `--enable_cameras` 를 빼먹었거나, `clipping_range` 의 far 가 너무 짧거나, 카메라가 허공을 본다. `--gui` 로 시선을 확인 |
