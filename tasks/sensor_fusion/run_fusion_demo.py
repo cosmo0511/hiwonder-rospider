@@ -295,9 +295,15 @@ def main() -> None:
             from ui_panel import FusionPanel  # noqa: PLC0415
 
             panel = FusionPanel(args_cli.cam_width, args_cli.cam_height)
-            print("[GUI] 오른쪽 패널에 센서 값이 실시간으로 올라간다.")
+            print(
+                "[GUI] 'RosPider | Depth + IMU Fusion' 창을 화면 왼쪽 위에 띄웠다."
+                " 안 보이면 Isaac Sim 창을 옮겨 보거나, 아래 터미널 출력을 보면 된다."
+            )
         except Exception as exc:
-            print(f"[GUI] 패널을 못 만들었다(시뮬은 계속): {exc}")
+            import traceback as _tb
+
+            print(f"[GUI] 패널을 못 만들었다(시뮬은 계속 돈다): {exc}")
+            _tb.print_exc()
     params = FusionParams(floor_mode=args_cli.floor_mode)
     if ignore_impact:
         params.bump_acc_mps2 = float("inf")
@@ -514,9 +520,13 @@ def main() -> None:
         save_gif(out_dir / f"{args_cli.tag}.gif", frames, fps=1.5)
 
     if args_cli.gui:
-        print("\n[GUI] 창을 닫으면 종료된다. 오른쪽 패널의 숫자가 계속 갱신된다.")
+        print("\n[GUI] 창을 닫으면 종료된다. 아래 한 줄이 계속 갱신된다(패널과 같은 값).")
         if args_cli.motion == "none":
             print("      --motion arm 을 주면 팔이 흔들려 센서 값이 변하는 걸 볼 수 있다.")
+        print(
+            "      d_fused=중력정렬 융합거리 / d_naive=뎁스단독 / d_roi=고정ROI,"
+            " px=장애물 픽셀 수\n"
+        )
         step = 0
         while simulation_app.is_running():
             t = step * sim_dt
@@ -541,6 +551,10 @@ def main() -> None:
             if step % 6 == 0:
                 depth, intrinsics, imu, result, q = read_and_fuse()
                 update_panel(q)
+                # 패널이 안 뜨는 환경도 있으므로 터미널에도 같은 값을 한 줄로 찍는다.
+                # 같은 줄을 덮어써서 스크롤을 더럽히지 않는다.
+                sys.stdout.write("\r" + result.summary() + "   ")
+                sys.stdout.flush()
             step += 1
 
 

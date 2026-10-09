@@ -68,12 +68,13 @@ class FusionPanel:
         self._ui = ui
         blank = np.zeros((cam_height, cam_width, 3), dtype=np.uint8)
 
-        self.window = ui.Window(
-            "RosPider | Depth + IMU Fusion",
-            width=430,
-            height=900,
-            dock_preference=ui.DockPreference.RIGHT_TOP,
-        )
+        # dock_preference 를 쓰면 기존 탭 뒤로 숨어 버리는 일이 있었다(Window 메뉴에도
+        # 안 뜬다 - 그 메뉴는 확장이 등록한 창만 보여 준다). 그래서 도킹을 쓰지 않고
+        # 화면 왼쪽 위에 **떠 있는 창**으로 띄운다. 사용자가 끌어다 원하는 곳에 두면 된다.
+        self.window = ui.Window("RosPider | Depth + IMU Fusion", width=430, height=880)
+        self.window.visible = True
+        self.window.position_x = 40
+        self.window.position_y = 40
 
         self._labels: dict[str, object] = {}
         with self.window.frame:
