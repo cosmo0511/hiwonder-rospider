@@ -100,6 +100,11 @@ parser.add_argument("--record_every", type=int, default=4, help="몇 스텝마�
 parser.add_argument("--cam_width", type=int, default=160)
 parser.add_argument("--cam_height", type=int, default=120)
 parser.add_argument("--no_rgb", action="store_true", help="RGB 를 끈다. VRAM 이 빠듯하면.")
+parser.add_argument(
+    "--guessed_intrinsics",
+    action="store_true",
+    help="실기 캘리브레이션(camera_info.yaml, 화각 63.0도) 대신 예전 추정값(70도)을 쓴다. 비교용.",
+)
 parser.add_argument("--floor_mode", choices=["estimated", "assumed_height"], default="estimated")
 parser.add_argument("--out", default="outputs/sensor_fusion", help="결과(CSV/PNG/GIF/NPZ) 디렉터리")
 parser.add_argument("--tag", default="run", help="결과 파일 이름에 붙일 꼬리표")
@@ -290,6 +295,7 @@ def main() -> None:
         with_rgb=not args_cli.no_rgb,
         num_envs=1,
         debug_vis=args_cli.gui and args_cli.imu_arrow,
+        use_real_intrinsics=not args_cli.guessed_intrinsics,
         scene=args_cli.scene,
         base_body=args_cli.base_body,
         arm_body=args_cli.arm_body,

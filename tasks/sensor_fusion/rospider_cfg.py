@@ -170,16 +170,34 @@ def make_robot_cfg(
     )
 
 
+# --------------------------------------------------- 실기 카메라 캘리브레이션
+# 출처: Hiwonder/ROSpider 의 src/peripherals/config/camera_info.yaml (실측값).
+#   image 640x480, fx=521.889 fy=525.09003 cx=339.68717 cy=240.34345
+#   -> 수평 화각 63.0도, 수직 화각 49.1도
+# 처음엔 70도로 어림잡았는데 7도 더 넓게 잡고 있었다.
+#
+# [주의] 그 파일의 camera_name 은 `usb_cam` 이다. 즉 **RGB USB 카메라**의 캘리브레이션일
+# 가능성이 있고, 뎁스 카메라(실기는 DEPTH_CAMERA_TYPE 환경변수로 기종을 고른다)의
+# 값이라는 보장은 없다. 그래도 내가 찍은 추정치보다는 로봇 설정에서 나온 실측값이 낫다.
+REAL_CAMERA_640 = (521.889, 525.09003, 339.68717, 240.34345)
+"""(fx, fy, cx, cy) at 640x480. 해상도를 바꾸면 같은 비율로 줄여 써야 화각이 보존된다."""
+
+
 def make_camera_cfg(
-    width: int = 160, height: int = 120, with_rgb: bool = True, arm_body: str = "link4"
+    width: int = 160,
+    height: int = 120,
+    with_rgb: bool = True,
+    arm_body: str = "link4",
+    use_real_intrinsics: bool = True,
 ) -> CameraCfg:
     """뎁스 카메라.
 
     - ``distance_to_image_plane`` 이 뎁스다(단위 m, 광학 z축 기준). ``"depth"`` 는
       같은 것의 별칭이다. ``CameraCfg.data_types`` 기본값은 ``["rgb"]`` 라서
       **뎁스를 쓰려면 반드시 명시해야 한다.**
-    - 실기 뎁스 카메라는 640x480 급이지만 VRAM 8 GB 에서는 해상도를 낮춰야 한다.
+    - 실기 뎁스 카메라는 640x480 이지만 VRAM 8 GB 에서는 해상도를 낮춰야 한다.
       160x120 이면 융합 판정에 충분하고, 노션 노트용 이미지로도 읽을 만하다.
+      **내부행렬은 실측값을 비례 축소해 쓰므로 화각(63.0도)은 실기와 같다.**
     - 카메라를 켰으면 **실행할 때 `--enable_cameras` 가 필요하다**(헤드리스에서도).
     """
     data_types = ["distance_to_image_plane"]
@@ -188,7 +206,22 @@ def make_camera_cfg(
         # VRAM 이 빠듯하면 이것부터 끄자.
         data_types.insert(0, "rgb")
 
-    # 수평 화각 70도: 2*atan(20.955 / (2*14.96)) = 70.0도
+    if use_real_intrinsics:
+        # 실측 내부행렬을 렌더 해상도에 맞게 비례 축소한다. 화각은 그대로 보존된다.
+        scale = width / 640.0
+        fx, fy, cx, cy = (v * scale for v in REAL_CAMERA_640)
+        spawn = sim_utils.PinholeCameraCfg.from_intrinsic_matrix(
+            intrinsic_matrix=[fx, 0.0, cx, 0.0, fy, cy, 0.0, 0.0, 1.0],
+            width=width,
+            height=height,
+            clipping_range=(0.05, 3.0),
+        )
+    else:
+        # 예전 추정값(수평 70도). 비교용으로 남겨 둔다.
+        spawn = sim_utils.PinholeCameraCfg(
+            focal_length=14.96, horizontal_aperture=20.955, clipping_range=(0.05, 3.0)
+        )
+
     return CameraCfg(
         # 실기와 같이 팔 끝에 붙인다. 팔이 움직이면 카메라도 따라 움직인다.
         # (merge_fixed_joints=True 로 변환하면 depth_cam_link 는 link4 에 흡수되므로
@@ -198,11 +231,7 @@ def make_camera_cfg(
         width=width,
         height=height,
         data_types=data_types,
-        spawn=sim_utils.PinholeCameraCfg(
-            focal_length=14.96,
-            horizontal_aperture=20.955,
-            clipping_range=(0.05, 3.0),
-        ),
+        spawn=spawn,
         offset=CameraCfg.OffsetCfg(
             pos=CAM_POS_IN_LINK4,
             rot=CAM_QUAT_IN_LINK4_WORLD_CONV,
@@ -314,6 +343,7 @@ def build_scene_cfg(
     with_rgb: bool = True,
     num_envs: int = 1,
     debug_vis: bool = False,
+    use_real_intrinsics: bool = True,
     scene: str = "box",
     base_body: str = "base_footprint",
     arm_body: str = "link4",
@@ -353,7 +383,9 @@ def build_scene_cfg(
     cfg.robot = make_robot_cfg(
         usd_path, pitch_deg=pitch_deg, articulation_root=articulation_root, root_z=root_z
     )
-    cfg.camera = make_camera_cfg(cam_width, cam_height, with_rgb, arm_body=arm_body)
+    cfg.camera = make_camera_cfg(
+        cam_width, cam_height, with_rgb, arm_body=arm_body, use_real_intrinsics=use_real_intrinsics
+    )
     cfg.imu = make_imu_cfg(debug_vis=debug_vis, base_body=base_body, pos=imu_pos)
 
     # 카메라의 월드 x 위치. 몸체를 숙이면 카메라가 앞으로 나온다.
