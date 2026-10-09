@@ -233,15 +233,40 @@ source /opt/isaaclab-scripts/isaac-env.sh
 cd /workspace/rospider
 ```
 
-프롬프트에 **`(isaac_lab)`** 이 붙어야 한다. 안 붙으면 설치가 안 된 것이니
-`bash /opt/isaaclab-steps/diag.sh` 로 확인한다.
+프롬프트에 **`(isaac_lab)`** 이 붙으면 된 것이다. 다만 **안 붙어도 정상일 수 있다**
+(아래 참고). 프롬프트는 믿지 말고 이걸로 확인하자:
 
-확인 한 줄:
+```bash
+which python && python --version && echo "ENV=$CONDA_DEFAULT_ENV"
+```
+
+```
+/opt/conda/envs/isaac_lab/bin/python
+Python 3.11.x
+ENV=isaac_lab                       <- 이러면 된 것이다
+```
 
 ```bash
 python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
 # 2.7.0+cu128 True   <- 이렇게 나와야 한다
 ```
+
+`/usr/bin/python` 이 나오거나 `ENV=` 가 비어 있으면 설치가 안 된 것이다.
+`bash /opt/isaaclab-steps/diag.sh` 로 어디까지 됐는지 본다.
+
+> **`(isaac_lab)` 이 안 붙는데 에러도 안 나는 경우.** 거의 항상 "환경은 잡혀 있고
+> 표시만 없는" 상태다. 컨테이너 entrypoint 가 **비대화형** 쉘에서 `isaac-env.sh` 를
+> 먼저 source 하는데, 거기서 `conda activate` 는 성공하지만 PS1 이 없어 표시가 안
+> 붙는다. 이어지는 대화형 bash 의 `.bashrc` 가 다시 source 해도
+> `CONDA_DEFAULT_ENV` 가 이미 맞아서 activate 를 건너뛴다. 그래서 조용히 아무 일도
+> 안 일어난다. `which python` 이 conda 경로를 가리키면 **그냥 진행하면 된다.**
+>
+> 스크립트는 고쳐 뒀다(대화형인데 PS1 에 표시가 없으면 다시 activate 한다). 다만
+> `/opt/isaaclab-scripts/` 는 **이미지에 구워진 사본**이라 이미지를 다시 빌드해야
+> 반영된다. 빌드 없이 쓰려면 레포 쪽 사본을 source 하면 된다:
+> ```bash
+> source /workspace/rospider/docker/isaaclab/scripts/isaac-env.sh
+> ```
 
 > **`python` 과 `isaaclab -p` 는 같다.** `isaaclab` 은 `/opt/IsaacLab/isaaclab.sh` 의
 > alias 고, `-p` 는 `${CONDA_PREFIX}/bin/python "$@"` 를 실행할 뿐이다. torch 를

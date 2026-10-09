@@ -18,13 +18,33 @@ if [[ ! -f "${CONDA_DIR}/etc/profile.d/conda.sh" ]]; then
     echo "[isaac-env] 설치를 시작하려면:  bash /opt/isaaclab-steps/00_preflight.sh" >&2
     export ISAAC_ENV_NOTICE_SHOWN=1
   fi
-elif [[ "${CONDA_DEFAULT_ENV:-}" != "${ISAAC_CONDA_ENV}" ]]; then
+else
   # shellcheck disable=SC1091
   source "${CONDA_DIR}/etc/profile.d/conda.sh"
-  if ! conda activate "${ISAAC_CONDA_ENV}" 2>/dev/null; then
-    echo "[isaac-env] '${ISAAC_CONDA_ENV}' 환경이 없습니다." >&2
-    echo "[isaac-env] 만들려면:  bash /opt/isaaclab-steps/10_conda_env.sh" >&2
+
+  # 언제 activate 를 (다시) 하나:
+  #   (a) 아직 이 환경이 아니거나,
+  #   (b) 대화형 쉘인데 프롬프트에 (isaac_lab) 표시가 없을 때.
+  #
+  # (b) 가 필요한 이유: entrypoint 가 **비대화형** 쉘에서 이 파일을 source 한다.
+  # 거기서 activate 는 성공하지만 PS1 이 없어 표시가 안 붙고, 환경변수만 상속된다.
+  # 이어지는 대화형 bash 의 .bashrc 가 다시 source 해도 CONDA_DEFAULT_ENV 가 이미
+  # 맞아서 activate 를 건너뛰므로, 프롬프트에는 영영 (isaac_lab) 이 안 붙는다.
+  # 실제로는 환경이 잡혀 있는데도 "안 붙는다" 고 헤매게 되는 지점이라 다시 건다.
+  _isaac_need_activate=0
+  if [[ "${CONDA_DEFAULT_ENV:-}" != "${ISAAC_CONDA_ENV}" ]]; then
+    _isaac_need_activate=1
+  elif [[ $- == *i* && "${PS1:-}" != *"(${ISAAC_CONDA_ENV})"* ]]; then
+    _isaac_need_activate=1
   fi
+
+  if [[ "${_isaac_need_activate}" == "1" ]]; then
+    if ! conda activate "${ISAAC_CONDA_ENV}" 2>/dev/null; then
+      echo "[isaac-env] '${ISAAC_CONDA_ENV}' 환경이 없습니다." >&2
+      echo "[isaac-env] 만들려면:  bash /opt/isaaclab-steps/10_conda_env.sh" >&2
+    fi
+  fi
+  unset _isaac_need_activate
 fi
 
 export ISAACLAB_PATH="${ISAACLAB_PATH:-/opt/IsaacLab}"
