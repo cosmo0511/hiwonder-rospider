@@ -73,6 +73,7 @@ def render_scene(
     obstacle_height: float,
     obstacle_depth: float = 0.20,
     obstacle_half_width: float = 0.12,
+    boxes: list[tuple[float, float, float, float, float, float]] | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """합성 뎁스와 IMU 중력을 만든다.
 
@@ -112,18 +113,27 @@ def render_scene(
     s_ground = torch.where(denom.abs() > 1e-12, -cam_pos[2] / denom, inf)
     s_ground = torch.where(s_ground > 1e-6, s_ground, inf)
 
-    # --- 상자 (slab method) ---
+    # --- 상자들 (slab method) ---
+    # boxes 는 카메라 기준 상대좌표 (dx0, dx1, y0, y1, z0, z1). 계단을 세울 때 쓴다.
+    aabbs: list[tuple[float, float, float, float, float, float]] = []
+    if boxes is not None:
+        aabbs.extend(boxes)
+    elif obstacle_dist is not None:
+        aabbs.append(
+            (obstacle_dist, obstacle_dist + obstacle_depth,
+             -obstacle_half_width, obstacle_half_width, 0.0, obstacle_height)
+        )
+
     s_box = inf
-    if obstacle_dist is not None:
-        x0 = cam_pos[0].item() + obstacle_dist
-        lo = torch.tensor([x0, -obstacle_half_width, 0.0], dtype=torch.float64)
-        hi = torch.tensor([x0 + obstacle_depth, obstacle_half_width, obstacle_height], dtype=torch.float64)
+    for dx0, dx1, y0, y1, z0, z1 in aabbs:
+        lo = torch.tensor([cam_pos[0].item() + dx0, y0, z0], dtype=torch.float64)
+        hi = torch.tensor([cam_pos[0].item() + dx1, y1, z1], dtype=torch.float64)
         t_lo = (lo - cam_pos) / ray_w
         t_hi = (hi - cam_pos) / ray_w
         t_near = torch.minimum(t_lo, t_hi).amax(dim=-1)
         t_far = torch.maximum(t_lo, t_hi).amin(dim=-1)
         hit = (t_far >= t_near.clamp_min(0.0)) & (t_far > 0)
-        s_box = torch.where(hit, t_near.clamp_min(0.0), inf)
+        s_box = torch.minimum(s_box, torch.where(hit, t_near.clamp_min(0.0), inf))
 
     depth = torch.minimum(s_ground, s_box).unsqueeze(0)
 
@@ -143,13 +153,37 @@ def run_case(
     params: FusionParams | None = None,
     width: int = 160,
     height: int = 120,
+    boxes: list | None = None,
 ) -> tuple:
     intrinsics = make_intrinsics(width, height, hfov_deg=70.0)
-    depth, g = render_scene(width, height, intrinsics, pitch_deg, obstacle_dist, obstacle_height)
+    depth, g = render_scene(
+        width, height, intrinsics, pitch_deg, obstacle_dist, obstacle_height, boxes=boxes
+    )
     lin_acc = torch.tensor([acc], dtype=torch.float64)
     result = fuse(depth, intrinsics, g, lin_acc, params or FusionParams())
     print(f"{name:34s} {result.summary()}")
     return result
+
+
+def stairs_boxes(
+    x_front: float = 0.55,
+    n_steps: int = 4,
+    step_height: float = 0.05,
+    step_depth: float = 0.14,
+    half_width: float = 0.35,
+) -> list[tuple[float, float, float, float, float, float]]:
+    """rospider_cfg._build_stairs 와 같은 치수의 계단을 합성 씬에 세운다."""
+    return [
+        (
+            x_front + step_depth * i,
+            x_front + step_depth * (i + 1),
+            -half_width,
+            half_width,
+            0.0,
+            step_height * (i + 1),
+        )
+        for i in range(n_steps)
+    ]
 
 
 def main() -> int:
@@ -202,6 +236,34 @@ def main() -> int:
         f"    (참고) 숙이면 카메라가 낮아지는데 상수를 믿으므로 높이가 밀린다 -> "
         f"d_fused={r.d_fused.item():.3f} m, 판정 {DECISION_NAMES[int(r.decision)]}"
     )
+
+    print("\n조건 H: 계단 4단 (단 높이 5 cm). 높이맵이 띠로 갈라져야 한다")
+    stairs = stairs_boxes()
+    r = run_case("H 수평 + 계단", 0.0, None, 0.0, boxes=stairs)
+    hm = r.height_map[0][r.obstacle_mask[0]]
+    check("H: 첫 단을 0.55 m 근처에서 잡음", abs(r.d_fused.item() - 0.55) < 0.06)
+    check("H: WARN", int(r.decision) == WARN)
+    if hm.numel():
+        bands = torch.histc(hm, bins=5, min=0.0, max=0.25)
+        print(f"    높이 분포(0~0.25 m 를 5칸): {[int(v) for v in bands]}  "
+              f"범위 {hm.min():.3f}~{hm.max():.3f} m")
+        check("H: 여러 단 높이가 섞여 나옴(띠)", int((bands > 20).sum()) >= 3)
+
+    print("\n조건 I: 같은 계단, 몸체 15도 숙임. 보이는 단의 높이 추정이 유지돼야 한다")
+    r2 = run_case("I 숙임 15도 + 계단", 15.0, None, 0.0, boxes=stairs)
+    hm2 = r2.height_map[0][r2.obstacle_mask[0]]
+    bins = [(0.00, 0.06, "1단 0.05"), (0.06, 0.11, "2단 0.10"),
+            (0.11, 0.16, "3단 0.15"), (0.16, 0.22, "4단 0.20")]
+    level = [int(((hm >= lo) & (hm < hi)).sum()) for lo, hi, _ in bins]
+    tilted = [int(((hm2 >= lo) & (hm2 < hi)).sum()) for lo, hi, _ in bins]
+    for (_, _, name), a, b in zip(bins, level, tilted):
+        print(f"    {name}: 수평 {a:5d} px -> 숙임 {b:5d} px")
+    check("I: 거리 추정이 기울기와 무관하게 유지", abs(r2.d_fused.item() - r.d_fused.item()) < 0.02)
+    check("I: 1~3단이 기울인 뒤에도 같은 높이 구간에 잡힘", all(v > 100 for v in tilted[:3]))
+    # 4단이 사라지는 것은 융합 오류가 아니라 **시야(FOV) 한계**다. 하향 24도 장착에
+    # 몸이 15도 더 숙으면 먼 곳/높은 곳이 화면 위로 잘려 나간다. 노트의 '한계' 항목.
+    print(f"    (주의) 4단은 숙이면 시야 밖으로 나간다: {level[3]} px -> {tilted[3]} px. "
+          f"융합 오류가 아니라 FOV 한계다.")
 
     print("\n" + "=" * 118)
     if failures:

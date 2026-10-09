@@ -480,6 +480,59 @@ python tasks/sensor_fusion/run_fusion_demo.py --enable_cameras --pitch_deg 20 \
 
 세 열(`fused` / `naive` / `roi`) 이 **엇갈리는 줄**이 과제에서 보여줄 장면이다.
 
+#### 5.5.1 계단 씬과 실시간 패널 (시연용)
+
+`--scene` 으로 무엇을 놓을지 고른다.
+
+| 값 | 무엇 | 쓰임 |
+|---|---|---|
+| `box` (기본) | 빨간 상자 하나. 실행 중에 옮길 수 있다 | 거리 스윕 실험 |
+| `stairs` | 계단 4단 (5/10/15/20 cm) | **시연.** 높이맵이 띠로 갈라져 융합 과정이 보인다 |
+| `mixed` | 넘어갈 수 있는 2 cm 단차 + 계단 | 시연. "멈출 것 / 넘어갈 것" 구분까지 보여준다 |
+
+`--gui` 로 띄우면 창 오른쪽에 **실시간 패널**이 붙는다. `isaaclab.ui.widgets` 의
+`ImagePlot` / `LinePlot` 으로 만든 것이라 Isaac Sim 창 안에서 바로 보인다.
+
+```
+┌──────────────────────────────┬─────────────────────────────┐
+│                              │ DECISION: WARN              │
+│                              │ ── DEPTH CAMERA (link4) ──  │
+│  3D 뷰포트                    │   d_fused   0.550 m         │
+│  로봇 + 계단 + 바닥            │   d_naive   0.415 m         │
+│                              │   d_roi     0.740 m  ← 놓침  │
+│  (IMU 가속도 화살표 표시)       │   obstacle pixels  2042     │
+│                              │ ── IMU (base_link) ──       │
+│                              │   body tilt      15.0 deg   │
+│                              │   gravity in IMU (0,-0.26,  │
+│                              │                    -0.97)   │
+│                              │   camera down-tilt 24.2 deg │
+│                              │ [Depth 이미지]               │
+│                              │ [Height above ground] ← 핵심 │
+│                              │ [Obstacle mask]             │
+│                              │ [d_fused / d_roi 그래프]     │
+└──────────────────────────────┴─────────────────────────────┘
+```
+
+가운데 **Height above ground** 패널이 "IMU 가 뎁스에 무슨 일을 하는가" 를 그대로
+보여준다. 바닥은 0 근처(파랑), 계단은 단마다 다른 색 띠로 갈라진다.
+
+시연 명령:
+
+```bash
+# 계단을 놓고 창을 띄운다. 패널 숫자가 실시간으로 갱신된다.
+python tasks/sensor_fusion/run_fusion_demo.py --enable_cameras --gui --scene stairs
+
+# 팔을 흔들어 카메라가 위아래를 훑게 한다 -> R_cam<-imu 가 매 스텝 바뀌는데도
+# 융합이 계단 높이를 똑같이 잡아내는 걸 볼 수 있다
+python tasks/sensor_fusion/run_fusion_demo.py --enable_cameras --gui \
+       --scene stairs --motion arm
+
+# 넘어갈 수 있는 단차까지 같이
+python tasks/sensor_fusion/run_fusion_demo.py --enable_cameras --gui --scene mixed
+```
+
+패널 생성에 실패해도 시뮬레이션은 계속 돈다(콘솔에 이유가 찍힌다).
+
 #### 6단계 — 스크린샷용 GUI 실행
 
 노션 노트에 넣을 "장면 스크린샷" 은 여기서 찍는다.
@@ -700,6 +753,8 @@ prim 이 **RigidBody 여야** 하므로(`UsdPhysics.RigidBodyAPI` 를 확인한�
 | E 넘어짐 | 30.0° | 0.80 m | inf | 0.240 | 0.331 | **STOP_TILT** | DANGER | WARN |
 | F 충격 | 0.0° | 0.80 m, a=8 m/s² | 0.800 | 0.415 | 0.820 | **STOP_IMPACT** | WARN | CLEAR |
 | G B를 상수높이로 | 20.0° | 0.80 m, h=0.15 | 0.102 ✗ | 0.287 | 0.442 | DANGER ✗ | DANGER | WARN |
+| H 계단 4단 | 0.0° | 5/10/15/20 cm | **0.550** | 0.415 | 0.740 | WARN | WARN | **CLEAR ✗** |
+| I 계단 + 15° 숙임 | 15.0° | 같음 | **0.550** | 0.313 | 0.516 | WARN | WARN | WARN |
 
 읽는 법:
 
@@ -712,6 +767,17 @@ prim 이 **RigidBody 여야** 하므로(`UsdPhysics.RigidBodyAPI` 를 확인한�
 - **D 는 '지나갈 수 있는 것' 을 가려낸다.** 2 cm 단차는 h=0.02 < 0.03 이라 마스크에서
   빠지고 `inf` 가 된다. 로봇이 멈출 이유가 없다. 거리만 보는 쪽은 구분을 못 한다.
 - **E/F 는 IMU 단독 기여다.** 거리와 무관하게 자세·충격이 상위 정지를 건다.
+- **H 는 고정 ROI 가 반대로 틀리는 경우다.** 지금까지는 고정 ROI 가 바닥을 장애물로
+  **오인(false positive)** 했는데, 계단에서는 화면 위쪽만 보느라 **계단을 통째로 놓친다
+  (false negative)**. CLEAR 를 내는 쪽이 오경보보다 위험하다. 융합은 0.550 m 로 첫 단을
+  정확히 잡는다.
+- **H 의 높이맵이 이 과제의 그림이다.** 장애물로 분류된 점들의 높이가
+  0.031 ~ 0.200 m 범위에 **띠 네 개**로 갈라진다(1단 758 px / 2단 614 / 3단 424 / 4단 246).
+  "IMU 로 중력 정렬을 했더니 계단이 높이별로 분리됐다" 가 눈에 보인다.
+- **I 는 기울여도 높이 추정이 안 흔들린다는 증거다.** 15° 숙여도 거리는 0.550 m 그대로고,
+  1~3단이 같은 높이 구간에 그대로 잡힌다. 다만 **4단은 246 px → 0 px 로 사라지는데,
+  이건 융합 오류가 아니라 시야(FOV) 한계다** — 하향 24° 장착에 몸이 15° 더 숙으면
+  먼 곳과 높은 곳이 화면 위로 잘려 나간다. 노트의 '한계' 항목에 쓸 재료다.
 - **G 는 의도된 실패다.** 설치 높이를 상수로 믿으면, 20도 숙일 때 카메라가 실제로
   6 cm 낮아진 걸 모른 채 모든 점의 높이를 그만큼 높게 본다. 바닥이 장애물로 올라와
   `0.102 m` DANGER 오경보가 난다. **바닥을 추정하는 쪽(기본값) 이 왜 필요한지** 가

@@ -219,6 +219,53 @@ class FusionSceneCfg(InteractiveSceneCfg):
     backdrop: AssetBaseCfg = None
 
 
+def _add_step(cfg, name: str, pos, size, color) -> None:
+    """정적 직육면체 하나를 씬에 붙인다.
+
+    `InteractiveScene` 은 cfg 의 `__dict__` 를 훑어 엔티티를 찾고 None 은 건너뛴다.
+    그래서 이렇게 **런타임에 속성을 추가해도** 제대로 스폰된다(계단 단 수를 자유롭게).
+    """
+    setattr(
+        cfg,
+        name,
+        AssetBaseCfg(
+            prim_path="{ENV_REGEX_NS}/" + name,
+            spawn=sim_utils.CuboidCfg(
+                size=size,
+                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=color),
+                collision_props=sim_utils.CollisionPropertiesCfg(),
+            ),
+            init_state=AssetBaseCfg.InitialStateCfg(pos=pos),
+        ),
+    )
+
+
+def _build_stairs(
+    cfg,
+    x_front: float,
+    n_steps: int = 4,
+    step_height: float = 0.05,
+    step_depth: float = 0.14,
+    width: float = 0.70,
+) -> None:
+    """계단을 세운다. 단마다 높이가 달라서 **높이맵이 띠 모양으로 갈라져 보인다.**
+
+    융합이 뭘 하는지 눈으로 보기에 상자 하나보다 훨씬 낫다:
+    - 바닥(0 m)은 제거되고, 단들은 높이별로 다른 값으로 남는다
+    - 몸체를 기울여도 띠의 높이값이 그대로여야 한다(그게 IMU 보정이 맞다는 증거)
+    """
+    for i in range(n_steps):
+        h = step_height * (i + 1)
+        _add_step(
+            cfg,
+            f"stair_{i}",
+            pos=(x_front + step_depth * (i + 0.5), 0.0, h / 2),
+            size=(step_depth, width, h),
+            # 단이 올라갈수록 붉어지게 해서 3D 화면에서도 구분된다.
+            color=(0.45 + 0.12 * i, 0.45 - 0.08 * i, 0.5 - 0.1 * i),
+        )
+
+
 def build_scene_cfg(
     usd_path: str,
     pitch_deg: float = 0.0,
@@ -230,6 +277,7 @@ def build_scene_cfg(
     with_rgb: bool = True,
     num_envs: int = 1,
     debug_vis: bool = False,
+    scene: str = "box",
 ) -> FusionSceneCfg:
     """실험 조건 하나를 씬 설정으로 만든다.
 
@@ -238,6 +286,10 @@ def build_scene_cfg(
             base 기준 x 는 여기에 카메라 오프셋을 더한 값이 된다.
         obstacle_height: 장애물 높이 [m]. 0.02 처럼 낮게 주면 '넘어갈 수 있는 단차' 가
             되고, 융합은 이걸 장애물로 세지 않아야 한다.
+        scene: 무엇을 놓을지.
+            - ``"box"``   : 빨간 상자 하나(움직일 수 있다). 거리 스윕 실험용.
+            - ``"stairs"``: 계단 4단. 높이맵이 띠로 갈라져 융합 과정이 눈에 보인다.
+            - ``"mixed"`` : 넘어갈 수 있는 2 cm 단차 + 계단 + 빨간 상자. 시연용.
     """
     cfg = FusionSceneCfg(num_envs=num_envs, env_spacing=4.0)
     cfg.robot = make_robot_cfg(usd_path, pitch_deg=pitch_deg)
@@ -248,6 +300,24 @@ def build_scene_cfg(
     pitch = math.radians(pitch_deg)
     cam_x = math.cos(pitch) * CAM_POS_IN_BASE[0] + math.sin(pitch) * CAM_POS_IN_BASE[2]
     obstacle_x = cam_x + obstacle_dist + 0.1  # +0.1 은 상자 중심까지 (깊이 0.2 의 절반)
+
+    if scene == "stairs":
+        # 계단만. 상자는 멀리 치워 둔다(거리 스윕 코드가 그대로 돌게 살려는 둔다).
+        _build_stairs(cfg, x_front=cam_x + 0.55)
+        obstacle_x = cam_x + 5.0
+    elif scene == "mixed":
+        # 넘어갈 수 있는 2 cm 단차 -> 융합은 이걸 장애물로 세지 않아야 한다.
+        _add_step(
+            cfg,
+            "low_lip",
+            pos=(cam_x + 0.45, 0.0, 0.01),
+            size=(0.25, 0.70, 0.02),
+            color=(0.35, 0.65, 0.4),
+        )
+        _build_stairs(cfg, x_front=cam_x + 0.95)
+        obstacle_x = cam_x + 5.0
+    elif scene != "box":
+        raise ValueError(f"scene 은 box/stairs/mixed 중 하나입니다: {scene}")
 
     # 장애물은 RigidObject + kinematic 이다. 중력에 안 떨어지고, 그러면서도
     # write_root_pose_to_sim 으로 **실행 중에 위치를 옮길 수 있다.** 거리 조건을
@@ -271,6 +341,8 @@ def build_scene_cfg(
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.6, 0.6, 0.62)),
             collision_props=sim_utils.CollisionPropertiesCfg(),
         ),
-        init_state=AssetBaseCfg.InitialStateCfg(pos=(cam_x + 1.8, 0.0, 0.3)),
+        init_state=AssetBaseCfg.InitialStateCfg(
+            pos=(cam_x + (2.4 if scene != "box" else 1.8), 0.0, 0.3)
+        ),
     )
     return cfg

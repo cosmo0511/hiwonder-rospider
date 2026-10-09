@@ -68,6 +68,13 @@ parser.add_argument(
     help="정지 스윕에서 시험할 장애물 거리 [m]. 모션 모드에서는 첫 값만 쓴다.",
 )
 parser.add_argument("--obstacle_height", type=float, default=0.15, help="장애물 높이 [m]")
+parser.add_argument(
+    "--scene",
+    choices=["box", "stairs", "mixed"],
+    default="box",
+    help="무엇을 놓을지. box=빨간 상자 하나(거리 스윕), stairs=계단 4단, "
+    "mixed=넘어갈 수 있는 2cm 단차 + 계단. 시연에는 stairs/mixed 가 보기 좋다.",
+)
 parser.add_argument("--settle_steps", type=int, default=40, help="거리를 옮긴 뒤 안정될 때까지 돌릴 스텝")
 parser.add_argument("--sample_steps", type=int, default=10, help="조건마다 기록할 스텝 수")
 
@@ -240,6 +247,7 @@ def main() -> None:
         with_rgb=not args_cli.no_rgb,
         num_envs=1,
         debug_vis=args_cli.gui,
+        scene=args_cli.scene,
     )
     scene = InteractiveScene(scene_cfg)
     sim.reset()
@@ -253,6 +261,17 @@ def main() -> None:
 
     # 외부 파라미터 계산기. 팔 각도를 넣으면 R_cam<-imu 를 돌려준다.
     ext = ArmCameraExtrinsics(urdf_path)
+
+    # 창을 띄웠으면 오른쪽에 실시간 패널을 붙인다. 실패해도 시뮬은 계속 돈다.
+    panel = None
+    if args_cli.gui:
+        try:
+            from ui_panel import FusionPanel  # noqa: PLC0415
+
+            panel = FusionPanel(args_cli.cam_width, args_cli.cam_height)
+            print("[GUI] 오른쪽 패널에 센서 값이 실시간으로 올라간다.")
+        except Exception as exc:
+            print(f"[GUI] 패널을 못 만들었다(시뮬은 계속): {exc}")
     params = FusionParams(floor_mode=args_cli.floor_mode)
     if ignore_impact:
         params.bump_acc_mps2 = float("inf")
@@ -296,6 +315,19 @@ def main() -> None:
             )
         result = fuse(depth, intrinsics, imu.projected_gravity_b, imu.lin_acc_b, params, r_cam_imu)
         return depth, intrinsics, imu, result, q
+
+    def update_panel(q) -> None:
+        if panel is None:
+            return
+        d = depth[0].squeeze(-1) if depth.dim() == 4 else depth[0]
+        cam_down = math.degrees(math.asin(max(-1.0, min(1.0, -float(ext.cam_pose_in_base(q)[1][2, 2])))))
+        panel.update(
+            result,
+            d.cpu().numpy(),
+            imu.projected_gravity_b[0].cpu().numpy(),
+            imu.lin_acc_b[0].cpu().numpy(),
+            cam_down,
+        )
 
     def log_row(**extra) -> dict:
         row = {
@@ -346,6 +378,7 @@ def main() -> None:
                     continue
                 depth, intrinsics, imu, result, q = read_and_fuse()
                 rows.append(log_row(obstacle_dist_m=dist, step=step))
+                update_panel(q)
 
             print(f"장애물 {dist:.2f} m -> {result.summary()}")
             title = (
@@ -411,6 +444,7 @@ def main() -> None:
 
             depth, intrinsics, imu, result, q = read_and_fuse()
             rows.append(log_row(obstacle_dist_m=dist, step=step, t_s=round(t, 3)))
+            update_panel(q)
 
             if args_cli.record and step % args_cli.record_every == 0:
                 cam_tilt = math.degrees(math.asin(-float(ext.cam_pose_in_base(q)[1][2, 2])))
@@ -445,7 +479,9 @@ def main() -> None:
         save_gif(out_dir / f"{args_cli.tag}.gif", frames, fps=1.5)
 
     if args_cli.gui:
-        print("[GUI] 창을 닫으면 종료된다.")
+        print("\n[GUI] 창을 닫으면 종료된다. 오른쪽 패널의 숫자가 계속 갱신된다.")
+        if args_cli.motion == "none":
+            print("      --motion arm 을 주면 팔이 흔들려 센서 값이 변하는 걸 볼 수 있다.")
         step = 0
         while simulation_app.is_running():
             t = step * sim_dt
@@ -466,6 +502,10 @@ def main() -> None:
             scene.write_data_to_sim()
             sim.step()
             scene.update(sim_dt)
+            # 사람이 보는 구간이므로 몇 스텝에 한 번만 갱신한다(UI 갱신이 제일 비싸다).
+            if step % 6 == 0:
+                depth, intrinsics, imu, result, q = read_and_fuse()
+                update_panel(q)
             step += 1
 
 
