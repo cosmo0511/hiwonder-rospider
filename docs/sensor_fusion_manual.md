@@ -522,8 +522,21 @@ python tasks/sensor_fusion/run_fusion_demo.py --enable_cameras --pitch_deg 20 \
 └──────────────────────────────┴─────────────────────────────┘
 ```
 
-가운데 **Height above ground** 패널이 "IMU 가 뎁스에 무슨 일을 하는가" 를 그대로
-보여준다. 바닥은 0 근처(파랑), 계단은 단마다 다른 색 띠로 갈라진다.
+기본은 **창 네 개**로 나눠서 뜬다. 한 창에 다 쌓으면 세로로 길어져 스크롤해야 한다.
+
+| 창 | 내용 |
+|---|---|
+| `RosPider \| Depth + IMU Fusion` | 판정, 거리 세 개, IMU pitch/roll, 수동 조작 슬라이더 |
+| `1. Depth [m]` | 카메라 원본 뎁스 |
+| `2. Height above ground` | **IMU 로 중력 정렬한 높이맵 — 융합의 핵심** |
+| `3. Obstacle mask` | 최종 판단에 실제로 쓰인 픽셀 |
+| `4. d_fused vs d_roi` | 시계열 그래프 |
+
+각 창은 끌어서 옮기거나 Isaac Sim 패널에 도킹할 수 있다. 한 창에 다 넣으려면
+`--single_panel`.
+
+2번 창이 "IMU 가 뎁스에 무슨 일을 하는가" 를 그대로 보여준다. 바닥은 0 근처(파랑),
+계단은 단마다 다른 색 띠로 갈라진다.
 
 시연 명령:
 

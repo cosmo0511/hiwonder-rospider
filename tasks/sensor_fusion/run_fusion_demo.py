@@ -105,6 +105,12 @@ parser.add_argument("--out", default="outputs/sensor_fusion", help="결과(CSV/P
 parser.add_argument("--tag", default="run", help="결과 파일 이름에 붙일 꼬리표")
 parser.add_argument("--gui", action="store_true", help="창을 띄운다")
 parser.add_argument(
+    "--single_panel",
+    action="store_true",
+    help="센서 이미지를 창마다 따로 띄우지 않고 숫자 패널 하나에 다 쌓는다. "
+    "기본은 창 4개로 나눠서 띄운다(스크롤 없이 한눈에 보려고).",
+)
+parser.add_argument(
     "--teleop",
     action="store_true",
     help="패널의 슬라이더로 몸체를 직접 기울인다. --gui 를 자동으로 켠다.\n"
@@ -309,11 +315,19 @@ def main() -> None:
             from ui_panel import FusionPanel  # noqa: PLC0415
 
             panel = FusionPanel(
-                args_cli.cam_width, args_cli.cam_height, enable_control=args_cli.teleop
+                args_cli.cam_width,
+                args_cli.cam_height,
+                enable_control=args_cli.teleop,
+                separate_windows=not args_cli.single_panel,
             )
             print(
-                "[GUI] 'RosPider | Depth + IMU Fusion' 창을 화면 왼쪽 위에 띄웠다."
-                " 안 보이면 Isaac Sim 창을 옮겨 보거나, 아래 터미널 출력을 보면 된다."
+                "[GUI] 창을 띄웠다. 끌어서 옮기거나 Isaac Sim 패널에 도킹할 수 있다:\n"
+                "        RosPider | Depth + IMU Fusion   판정 + 숫자"
+                + ("" if args_cli.single_panel else
+                   "\n        1. Depth [m]                    카메라 원본"
+                   "\n        2. Height above ground          IMU 로 정렬한 높이맵"
+                   "\n        3. Obstacle mask                최종 판단에 쓰인 픽셀"
+                   "\n        4. d_fused vs d_roi             시계열 그래프")
             )
         except Exception as exc:
             import traceback as _tb

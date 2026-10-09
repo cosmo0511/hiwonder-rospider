@@ -4,6 +4,20 @@
 무슨 판정을 내렸는지**가 실시간으로 올라간다. 과제가 요구하는 "두 센서의 정보가
 최종 판단에 어떻게 함께 쓰이는지" 를 한 화면에서 보여주는 부분이다.
 
+창을 나눈다
+-----------
+숫자 패널 하나에 이미지 셋까지 쌓으면 세로로 길어져 스크롤해야 보이고, 3D 뷰포트와
+나란히 놓기도 어렵다. 그래서 기본은 **창 네 개**로 나눈다.
+
+    RosPider | Depth + IMU Fusion   판정 + 숫자 + 수동 조작 슬라이더
+    1. Depth [m]                    카메라 원본 뎁스
+    2. Height above ground          IMU 로 중력 정렬한 높이맵  <- 융합의 핵심
+    3. Obstacle mask                최종 판단에 쓰인 픽셀
+    4. d_fused vs d_roi             시계열 그래프
+
+각 창은 끌어서 옮기거나 Isaac Sim 패널에 도킹할 수 있다.
+한 창에 다 넣고 싶으면 `separate_windows=False`(`--single_panel`).
+
 만들기 순서가 중요하다
 ----------------------
 `ImagePlot` / `LinePlot` 은 Isaac Lab 의 위젯이라 버전이나 환경에 따라 생성이
@@ -66,6 +80,7 @@ class FusionPanel:
         cam_height: int = 120,
         history: int = 300,
         enable_control: bool = False,
+        separate_windows: bool = True,
     ) -> None:
         import omni.ui as ui  # noqa: PLC0415
 
@@ -79,10 +94,13 @@ class FusionPanel:
         # 도킹하면 기존 탭 뒤로 숨는 일이 있었고, 직접 만든 ui.Window 는
         # Isaac Sim 의 Window 메뉴에도 안 올라와 찾을 방법이 없다.
         # 그래서 화면 왼쪽 위에 떠 있는 창으로 띄운다. 끌어서 옮기면 된다.
-        self.window = ui.Window("RosPider | Depth + IMU Fusion", width=430, height=880)
+        self.windows = []
+        main_h = 470 if separate_windows else 880
+        self.window = ui.Window("RosPider | Depth + IMU Fusion", width=430, height=main_h)
         self.window.visible = True
         self.window.position_x = 40
         self.window.position_y = 60
+        self.windows.append(self.window)
 
         blank = np.zeros((cam_height, cam_width, 3), dtype=np.uint8)
 
@@ -141,44 +159,91 @@ class FusionPanel:
                         ui.Label(f"(슬라이더 생성 실패: {exc})", style={"color": _DIM})
                         print(f"[ui_panel] 슬라이더 실패(패널은 계속): {exc}")
 
-                # --- 센서 이미지 (실패해도 위쪽 숫자는 남는다) ---
-                ui.Label("WHAT THE FUSION SEES", style={"font_size": 16, "color": _HEAD})
-                try:
-                    from isaaclab.ui.widgets import ImagePlot  # noqa: PLC0415
+                # --- 센서 이미지 ---
+                # separate_windows 면 창을 따로 띄운다. 한 창에 다 넣으면 세로로
+                # 길어져 스크롤해야 보이고, 3D 뷰포트와 나란히 놓기도 어렵다.
+                if not separate_windows:
+                    ui.Label("WHAT THE FUSION SEES", style={"font_size": 16, "color": _HEAD})
+                    self._build_images(blank, history)
 
-                    self.depth_plot = ImagePlot(
-                        image=blank, label="Depth [m]", widget_height=140, show_min_max=False
-                    )
-                    self.height_plot = ImagePlot(
-                        image=blank,
-                        label="Height above ground (IMU)",
-                        widget_height=140,
-                        show_min_max=False,
-                    )
-                    self.mask_plot = ImagePlot(
-                        image=blank,
-                        label="Obstacle mask (fused)",
-                        widget_height=140,
-                        show_min_max=False,
-                    )
-                except Exception as exc:
-                    ui.Label(f"(이미지 위젯 생성 실패: {exc})", style={"color": _DIM})
-                    print(f"[ui_panel] ImagePlot 실패(숫자 패널은 계속): {exc}")
+        if separate_windows:
+            self._build_image_windows(blank, history)
 
-                # --- 그래프 ---
-                try:
-                    from isaaclab.ui.widgets import LinePlot  # noqa: PLC0415
+    # ------------------------------------------------------------------ 위젯 만들기
+    def _build_images(self, blank, history: int) -> None:
+        """한 창 안에 이미지 셋과 그래프를 쌓는다(separate_windows=False 용)."""
+        ui = self._ui
+        for attr, label, h in (
+            ("depth_plot", "Depth [m]", 140),
+            ("height_plot", "Height above ground (IMU)", 140),
+            ("mask_plot", "Obstacle mask (fused)", 140),
+        ):
+            try:
+                from isaaclab.ui.widgets import ImagePlot  # noqa: PLC0415
 
-                    self.line_plot = LinePlot(
-                        y_data=[[0.0], [0.0]],
-                        y_min=0.0,
-                        y_max=1.5,
-                        plot_height=120,
-                        legends=["d_fused", "d_roi"],
-                        max_datapoints=history,
-                    )
-                except Exception as exc:
-                    print(f"[ui_panel] LinePlot 실패(무시하고 계속): {exc}")
+                setattr(
+                    self,
+                    attr,
+                    ImagePlot(image=blank, label=label, widget_height=h, show_min_max=False),
+                )
+            except Exception as exc:
+                ui.Label(f"({label} 생성 실패: {exc})", style={"color": _DIM})
+                print(f"[ui_panel] ImagePlot '{label}' 실패: {exc}")
+        self._build_line_plot(history)
+
+    def _build_image_windows(self, blank, history: int) -> None:
+        """이미지마다 창을 하나씩 띄운다. 사용자가 끌어다 원하는 곳에 둘 수 있다."""
+        ui = self._ui
+        specs = (
+            ("depth_plot", "1. Depth [m]  (raw sensor)", 60),
+            ("height_plot", "2. Height above ground  (IMU-corrected)", 360),
+            ("mask_plot", "3. Obstacle mask  (fused decision)", 660),
+        )
+        for attr, title, pos_y in specs:
+            try:
+                from isaaclab.ui.widgets import ImagePlot  # noqa: PLC0415
+
+                win = ui.Window(title, width=380, height=290)
+                win.visible = True
+                win.position_x = 500
+                win.position_y = pos_y
+                self.windows.append(win)
+                with win.frame:
+                    with ui.VStack(spacing=4, height=0):
+                        setattr(
+                            self,
+                            attr,
+                            ImagePlot(image=blank, label="", widget_height=210, show_min_max=False),
+                        )
+            except Exception as exc:
+                print(f"[ui_panel] 이미지 창 '{title}' 실패: {exc}")
+
+        try:
+            win = ui.Window("4. d_fused vs d_roi", width=380, height=220)
+            win.visible = True
+            win.position_x = 500
+            win.position_y = 960
+            self.windows.append(win)
+            with win.frame:
+                with ui.VStack(spacing=4, height=0):
+                    self._build_line_plot(history)
+        except Exception as exc:
+            print(f"[ui_panel] 그래프 창 실패: {exc}")
+
+    def _build_line_plot(self, history: int) -> None:
+        try:
+            from isaaclab.ui.widgets import LinePlot  # noqa: PLC0415
+
+            self.line_plot = LinePlot(
+                y_data=[[0.0], [0.0]],
+                y_min=0.0,
+                y_max=1.5,
+                plot_height=120,
+                legends=["d_fused", "d_roi"],
+                max_datapoints=history,
+            )
+        except Exception as exc:
+            print(f"[ui_panel] LinePlot 실패(무시하고 계속): {exc}")
 
     def _row(self, text: str, big: bool = False):
         """'이름 ....... 값' 한 줄. 값 라벨을 돌려준다."""
