@@ -74,7 +74,10 @@ def pitch_to_quat(pitch_deg: float) -> tuple[float, float, float, float]:
 
 
 def make_robot_cfg(
-    usd_path: str, pitch_deg: float = 0.0, articulation_root: str | None = None
+    usd_path: str,
+    pitch_deg: float = 0.0,
+    articulation_root: str | None = None,
+    root_z: float = BASE_HEIGHT,
 ) -> ArticulationCfg:
     """RosPider ArticulationCfg.
 
@@ -82,6 +85,10 @@ def make_robot_cfg(
         usd_path: 02_urdf_to_usd.py 가 만든 USD 경로.
         pitch_deg: 몸체를 앞으로 숙이는 각도 [deg]. 실험 조건을 바꾸는 손잡이다.
             USD 를 ``fix_base=True`` 로 변환했으므로 이 자세가 그대로 유지된다.
+        root_z: 루트 바디를 월드 z 어디에 놓을지 [m].
+            루트가 ``base_link`` 면 ``BASE_HEIGHT``(0.116), ``base_footprint`` 면
+            **0.0** 이다. base_footprint 는 이름 그대로 바닥 투영점이라 지면에 놓아야
+            base_link 가 제 높이(0.116 m)에 온다. 이걸 틀리면 로봇이 11.6 cm 떠 있다.
         articulation_root: 아티큘레이션 루트 prim 을 **직접 지정**한다
             (``prim_path`` 에 이어 붙는 상대 경로. 예: ``""`` 는 Robot prim 자체,
             ``"/root_joint"``, ``"/base_link"``).
@@ -107,7 +114,7 @@ def make_robot_cfg(
             ),
         ),
         init_state=ArticulationCfg.InitialStateCfg(
-            pos=(0.0, 0.0, BASE_HEIGHT),
+            pos=(0.0, 0.0, root_z),
             rot=pitch_to_quat(pitch_deg),
             # [미검증] 다리 각도는 실기/GUI 에서 맞춰본 값이 아니다. 0 으로 두면 다리가
             # 쭉 뻗은 자세가 되어 메시가 바닥을 뚫을 수 있다. GUI(--view) 로 보면서
@@ -193,7 +200,11 @@ def make_camera_cfg(
     )
 
 
-def make_imu_cfg(debug_vis: bool = False, base_body: str = "base_link") -> ImuCfg:
+def make_imu_cfg(
+    debug_vis: bool = False,
+    base_body: str = "base_link",
+    pos: tuple[float, float, float] = IMU_POS_IN_BASE,
+) -> ImuCfg:
     """IMU.
 
     `gravity_bias=(0,0,0)` 으로 둔 이유: 기본값 (0,0,9.81) 은 실제 IMU 처럼 정지
@@ -208,7 +219,7 @@ def make_imu_cfg(debug_vis: bool = False, base_body: str = "base_link") -> ImuCf
         # (--no-merge-fixed-joints 로 변환했다면 prim_path 를 ".../imu_link" 로,
         #  offset 을 기본값으로 두면 된다.)
         prim_path="{ENV_REGEX_NS}/Robot/" + base_body,
-        offset=ImuCfg.OffsetCfg(pos=IMU_POS_IN_BASE, rot=IMU_QUAT_IN_BASE),
+        offset=ImuCfg.OffsetCfg(pos=pos, rot=IMU_QUAT_IN_BASE),
         gravity_bias=(0.0, 0.0, 0.0),
         update_period=0.0,
         # GUI 로 볼 때 켜면 IMU 가속도 방향 화살표가 씬에 그려진다.
@@ -311,9 +322,24 @@ def build_scene_cfg(
             - ``"mixed"`` : 넘어갈 수 있는 2 cm 단차 + 계단 + 빨간 상자. 시연용.
     """
     cfg = FusionSceneCfg(num_envs=num_envs, env_spacing=4.0)
-    cfg.robot = make_robot_cfg(usd_path, pitch_deg=pitch_deg, articulation_root=articulation_root)
+
+    # merge_fixed_joints=True 로 변환하면 base_link 가 base_footprint 안으로 흡수된다.
+    # 그러면 (a) 루트 바디는 지면(z=0)에 놓아야 하고, (b) IMU 오프셋도 base_footprint
+    # 기준으로 BASE_HEIGHT 만큼 올려 줘야 한다. 어느 쪽이 루트인지는 --base_body 로 받는다.
+    # (`02_urdf_to_usd.py --inspect` 가 실제 바디 이름을 찍어 준다.)
+    on_footprint = base_body == "base_footprint"
+    root_z = 0.0 if on_footprint else BASE_HEIGHT
+    imu_pos = (
+        (IMU_POS_IN_BASE[0], IMU_POS_IN_BASE[1], IMU_POS_IN_BASE[2] + BASE_HEIGHT)
+        if on_footprint
+        else IMU_POS_IN_BASE
+    )
+
+    cfg.robot = make_robot_cfg(
+        usd_path, pitch_deg=pitch_deg, articulation_root=articulation_root, root_z=root_z
+    )
     cfg.camera = make_camera_cfg(cam_width, cam_height, with_rgb, arm_body=arm_body)
-    cfg.imu = make_imu_cfg(debug_vis=debug_vis, base_body=base_body)
+    cfg.imu = make_imu_cfg(debug_vis=debug_vis, base_body=base_body, pos=imu_pos)
 
     # 카메라의 월드 x 위치. 몸체를 숙이면 카메라가 앞으로 나온다.
     pitch = math.radians(pitch_deg)
