@@ -22,9 +22,13 @@ Kit 이 필요 없는 것부터 순서대로 통과시키면, 문제가 생겼�
 
 ## 복붙 순서
 
+시뮬레이션은 **노트북(RTX 4060)의 도커 컨테이너 안**에서 돈다. 환경이 셋으로 갈리는
+이유는 매뉴얼 5.0절, 전체 사양은 5.0.2절.
+
 ```bash
-# ── 호스트 ──────────────────────────────────────────────
+# ── 호스트 (노트북, Ubuntu 24.04) ───────────────────────
 cd ~/hiwonder-rospider
+git fetch origin && git checkout claude/great-tesla-700vl0 && git pull
 xhost +local:root                                              # GUI 쓸 거면
 docker compose -f docker/isaaclab/docker-compose.yml run --rm base
 

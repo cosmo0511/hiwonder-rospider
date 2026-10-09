@@ -133,19 +133,74 @@
 
 ## 5. 어떻게 돌리나
 
-### 5.0 명령을 어디서 치는지 먼저 구분하자
+### 5.0 환경이 셋이다 — 무엇이 어디서 도나
 
-이 과제의 명령은 **세 군데**에서 친다. 헷갈리면 거의 모든 에러가 여기서 나온다.
+가장 헷갈리는 지점이라 먼저 못박는다. **코드를 쓰는 곳과 시뮬레이션이 도는 곳이 다르다.**
+
+| | ① 코드 작성 환경 | ② 노트북 (호스트) | ③ 도커 컨테이너 |
+|---|---|---|---|
+| 무엇 | 에디터 / Claude Code 클라우드 세션 | 실제 하드웨어 | **시뮬레이션이 도는 곳** |
+| OS | (상관없음) | **Ubuntu 24.04** | **Ubuntu 22.04** |
+| Python | (상관없음) | (상관없음) | **3.11** (conda `isaac_lab`) |
+| GPU | 없어도 된다 | RTX 4060 Laptop **8188 MiB** | 호스트 GPU 를 그대로 쓴다 |
+| Isaac Sim | 없다 | 없다 | **5.1.0** |
+| 여기서 하는 일 | 코드 작성, `git push` | `docker` / `xhost` / `nvidia-smi` **뿐** | **모든 python 명령** |
+| 레포 경로 | 각자 클론한 곳 | `~/hiwonder-rospider` | `/workspace/rospider` |
+
+```
+  ① 코드 작성 (GPU 불필요)
+       └─ git push ──► GitHub ──► git pull ──┐
+                                              ▼
+                        ② 노트북 / 호스트 (Ubuntu 24.04 + RTX 4060 + 드라이버 580)
+                              └─ docker compose run --rm base
+                                    └─ ③ 컨테이너 (Ubuntu 22.04 + py3.11 + Isaac Sim 5.1)
+                                          └─ /workspace/rospider 에서 실행
+```
+
+**호스트가 24.04 인데 컨테이너가 22.04 인 것은 맞다.** 컨테이너가 자기 userspace 를
+들고 오고, 호스트에서 공유되는 것은 NVIDIA 드라이버뿐이다. 그래서 호스트 OS 버전은
+거의 상관없고, **드라이버 버전(570+, 이 레포는 580.173.02)만 중요하다.**
+컨테이너를 22.04 로 고정한 이유는 GLIBC 2.35 가 Isaac Sim pip 설치의 하한선이고
+ROS 2 Humble 이 22.04 용으로 빌드돼 있기 때문이다. 자세한 건 레포 루트 `CLAUDE.md`.
+
+이 과제의 **0~3단계(5.4절) 는 GPU 도 Isaac Sim 도 필요 없다.** xacro 전개, 기구학
+계산, 융합 로직 테스트는 ① 에서도 돌아간다. 4단계부터가 ③ 전용이다.
+
+### 5.0.1 명령을 어디서 치는지 — 프롬프트로 구분
 
 | 프롬프트 | 어디 | 무엇을 치나 |
 |---|---|---|
-| `user@노트북:~/hiwonder-rospider$` | **호스트** | docker 명령, `xhost`, `nvidia-smi` |
-| `root@...:/workspace#` | **컨테이너** (conda 비활성) | `source .../isaac-env.sh` 한 줄 |
-| `(isaac_lab) root@...:/workspace/rospider#` | **컨테이너 + conda 활성** | 이 과제의 모든 python 명령 |
+| `user@노트북:~/hiwonder-rospider$` | **② 호스트** | docker 명령, `xhost`, `nvidia-smi` |
+| `root@...:/workspace#` | **③ 컨테이너** (conda 비활성) | `source .../isaac-env.sh` 한 줄 |
+| `(isaac_lab) root@...:/workspace/rospider#` | **③ 컨테이너 + conda 활성** | 이 과제의 모든 python 명령 |
 
 레포는 컨테이너 안 **`/workspace/rospider`** 에 bind mount 된다. 호스트에서 수정한 파일이
 즉시 보이고, 컨테이너가 만든 결과물(`outputs/`)도 호스트 레포 안에 그대로 남는다.
 **결과를 꺼내려고 `docker cp` 를 할 필요가 없다.**
+
+### 5.0.2 전체 사양 한눈에
+
+노션 노트의 "실행 환경" 칸에 그대로 옮길 표다.
+
+| 항목 | 값 | 비고 |
+|---|---|---|
+| 호스트 OS | Ubuntu 24.04 | 컨테이너가 자기 userspace 를 들고 오므로 버전 제약 거의 없음 |
+| GPU | NVIDIA RTX 4060 Laptop, VRAM 8188 MiB | **공식 최소(RTX 4080 16GB) 아래.** 돌아가지만 설정을 줄여야 한다 |
+| 드라이버 | 580.173.02 | CUDA 12.8 에 570+ 필요 |
+| CPU / RAM | Ryzen 7 8845HS (8C/16T) / 15227 MiB + 스왑 28671 MiB | |
+| 컨테이너 OS | Ubuntu 22.04 | GLIBC 2.35 = Isaac Sim pip 하한선 |
+| Python | 3.11 (conda `isaac_lab`) | Isaac Sim 5.x 고정. **협상 불가** |
+| Isaac Sim | 5.1.0 | `isaacsim[all,extscache]==5.1.0` |
+| Isaac Lab | v2.3.1 | 소스 클론 + `./isaaclab.sh -i` |
+| PyTorch | 2.7.0 / torchvision 0.22.0 (cu128) | |
+| CUDA (베이스 이미지) | 12.8.1 | |
+| ROS 2 | Humble | python 3.10 쪽. **이 과제는 쓰지 않는다** |
+| 추가 설치 | `xacro`, `matplotlib` | `pip install` (5.3절) |
+| 이 과제 설정 | `num_envs=1`, 카메라 160x120, 수평화각 70도 | 8 GB VRAM 기준 |
+
+실기 로봇(RosPider 보드) 은 Jetson Orin Nano + Ubuntu 22.04 + ROS 2 Humble 로 알려져
+있으나 **이 레포에서 확인한 바 없다.** 보드에서 `echo $ROS_DISTRO` 로 확인해야 한다.
+이 과제는 실기와 통신하지 않으므로 지금은 영향이 없다.
 
 ### 5.1 호스트: 컨테이너 띄우기
 
@@ -154,7 +209,12 @@ Isaac Sim / Isaac Lab 설치가 아직이면 먼저
 여기서는 설치가 끝난 상태를 가정한다.
 
 ```bash
-cd ~/hiwonder-rospider           # 레포를 클론한 곳
+# 이 과제 코드가 올라간 브랜치를 받는다 (처음 한 번)
+cd ~/hiwonder-rospider           # 레포를 클론한 곳. 없으면
+                                 #   git clone https://github.com/cosmo0511/hiwonder-rospider.git
+git fetch origin
+git checkout claude/great-tesla-700vl0
+git pull
 
 xhost +local:root                # GUI 를 쓸 거면 매 로그인마다 1회
 docker compose -f docker/isaaclab/docker-compose.yml run --rm base
@@ -626,7 +686,7 @@ prim 이 **RigidBody 여야** 하므로(`UsdPhysics.RigidBodyAPI` 를 확인한�
 |---|---|
 | 기본 정보 | 제목 `[센서융합 과제] 학번_이름_RosPider 뎁스+IMU 근접 판단`, 학번·이름 |
 | 과제 목표 | 2절 그대로. "바닥을 장애물로 오인하는 문제" 를 앞에 세우면 이야기가 선다 |
-| 실행 환경 | Isaac Sim 5.1.0 / Isaac Lab 2.3.1 / Python 3.11 / PyTorch 2.7.0+cu128 / Ubuntu 22.04 컨테이너 / RTX 4060 Laptop 8 GB. `docker/isaaclab/` 참고 |
+| 실행 환경 | **5.0.2절의 사양 표를 그대로 옮긴다.** 컨테이너가 Ubuntu 22.04, 호스트가 24.04 인 이유도 한 줄 적으면 좋다 |
 | 장면 스크린샷 | `--gui` 로 띄워 캡처 + `02_urdf_to_usd.py --view` 의 로봇 전체 모습 |
 | 센서 위치·방향·설정 | 4절 표를 그대로. `urdf_fk.py` 출력을 캡처해 붙이면 근거까지 보인다 |
 | 융합 흐름도 | 3절 다이어그램 |
