@@ -516,6 +516,10 @@ cd /workspace/rospider
 `pip install` 한 것, 받아온 에셋, 변환한 USD, 결과물은 **전부 남아 있다**
 (앞의 둘은 도커 볼륨, 뒤의 둘은 레포 bind mount).
 
+> **코드를 갱신할 때는 호스트 터미널에서 `git pull` 하자.** 컨테이너는 root 로 돌아서
+> `detected dubious ownership` 로 막히고, 우회해서 pull 하면 새 파일이 root 소유가 된다.
+> bind mount 라 호스트에서 받으면 컨테이너에 즉시 보인다.
+
 ### 5.10 체크포인트 — 여기까지 됐으면 다음으로
 
 | # | 명령 | 이게 보이면 통과 |
@@ -737,6 +741,7 @@ prim 이 **RigidBody 여야** 하므로(`UsdPhysics.RigidBodyAPI` 를 확인한�
 | `data_types` 에 뎁스가 없다 | `CameraCfg.data_types` 기본값은 `["rgb"]` 다. `"distance_to_image_plane"` 을 명시해야 한다 |
 | 로봇이 바닥을 뚫거나 다리가 꺾인다 | 다리 조인트 목표가 0 이라 그렇다. GUI 로 보면서 coxa/femur/tibla 부호를 찾는다. `fix_base=True` 라 넘어지지는 않는다 |
 | 카메라가 천장을 본다 | 팔 조인트가 0 이다. `ARM_OBSERVE_POSE` 를 적용했는지, 그리고 팔 게인이 자세를 붙잡는지 확인 |
+| `fatal: detected dubious ownership in repository at '/workspace/rospider'` | 컨테이너는 root 로 도는데 파일은 호스트 사용자 소유다. **애초에 컨테이너 안에서 git 을 쓰지 말고 호스트 터미널에서 pull 하자**(bind mount 라 즉시 보인다). 컨테이너에서 pull 하면 새 파일이 root 소유가 돼 호스트에서 건드리기 번거로워진다. 꼭 컨테이너에서 써야 하면 `git config --global --add safe.directory /workspace/rospider` |
 | `(isaac_lab)` 이 프롬프트에 안 붙고 에러도 없음 | 대개 환경은 잡혀 있고 표시만 없다. `which python` 이 `/opt/conda/envs/isaac_lab/bin/python` 이면 그냥 진행. 5.2절 참고 |
 | `No module named 'omni'` | 고장 아니다. `AppLauncher` 뒤에서만 import 가능 |
 | `No module named 'isaaclab'` | `isaaclab.sh -i` 가 실패를 종료코드에 안 싣는다. `bash /opt/isaaclab-steps/diag.sh` |
