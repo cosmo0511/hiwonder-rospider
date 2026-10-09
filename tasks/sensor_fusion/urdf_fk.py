@@ -136,16 +136,18 @@ def main() -> None:
     p.add_argument("--urdf", type=Path, default=Path("assets/rospider_description/rospider.urdf"))
     p.add_argument("--joints", default="", help="예: joint2=1.0,joint3=-1.2")
     p.add_argument("--links", default=",".join(LINKS_OF_INTEREST))
+    p.add_argument("--base", default="base_link", help="기준 링크. 예: link4")
     args = p.parse_args()
 
     joints = load_joints(args.urdf)
     q = parse_joint_arg(args.joints)
     if q:
         print(f"팔 조인트: {q}")
+    print(f"[기준 링크] {args.base}")
     print(f"{'link':18s}{'pos (m)':34s}{'quat (w,x,y,z)':42s}")
     poses = {}
     for link in args.links.split(","):
-        pos, rot = link_pose(link.strip(), joints, q)
+        pos, rot = link_pose(link.strip(), joints, q, base=args.base)
         poses[link.strip()] = (pos, rot)
         quat = matrix_to_quat(rot)
         print(f"{link.strip():18s}{np.array2string(pos, precision=5, suppress_small=True):34s}"
@@ -160,7 +162,7 @@ def main() -> None:
             print(f"  {label} -> {np.array2string(rot[:, col], precision=4, suppress_small=True)}")
 
     # 융합에 필요한 상수: IMU 프레임 -> 카메라 광학 프레임 회전
-    if "imu_link" in poses and "depth_cam_frame" in poses:
+    if "imu_link" in poses and "depth_cam_frame" in poses and args.base == "base_link":
         _, r_b_imu = poses["imu_link"]
         _, r_b_cam = poses["depth_cam_frame"]
         r_cam_imu = r_b_cam.T @ r_b_imu

@@ -202,17 +202,25 @@ def _normalize(vec: torch.Tensor, eps: float = 1e-9) -> torch.Tensor:
     return vec / vec.norm(dim=-1, keepdim=True).clamp_min(eps)
 
 
-def gravity_in_camera(projected_gravity_b: torch.Tensor, params: FusionParams) -> torch.Tensor:
+def gravity_in_camera(
+    projected_gravity_b: torch.Tensor,
+    params: FusionParams,
+    r_cam_imu=None,
+) -> torch.Tensor:
     """IMU 가 본 중력을 카메라 광학 프레임으로 옮긴다.
 
     Args:
         projected_gravity_b: (N, 3) `imu.data.projected_gravity_b`. 아래를 향하는 단위벡터.
+        params: 임계값·상수. `r_cam_imu` 를 안 넘기면 여기 값을 쓴다.
+        r_cam_imu: (3,3) 외부 파라미터. 팔이 움직이는 실험에서는 매 스텝 달라지므로
+            `extrinsics.ArmCameraExtrinsics` 가 계산한 값을 여기로 넘긴다.
 
     Returns:
         (N, 3) 카메라 광학 프레임에서의 중력 단위벡터.
     """
+    source = params.r_cam_imu if r_cam_imu is None else r_cam_imu
     rot = torch.as_tensor(
-        params.r_cam_imu, dtype=projected_gravity_b.dtype, device=projected_gravity_b.device
+        source, dtype=projected_gravity_b.dtype, device=projected_gravity_b.device
     )
     return _normalize(projected_gravity_b @ rot.transpose(0, 1))
 
@@ -223,6 +231,7 @@ def fuse(
     projected_gravity_b: torch.Tensor,
     lin_acc_b: torch.Tensor,
     params: FusionParams,
+    r_cam_imu=None,
 ) -> FusionResult:
     """뎁스와 IMU 를 묶어 하나의 판정을 낸다.
 
@@ -233,6 +242,9 @@ def fuse(
         lin_acc_b: (N, 3) IMU 프레임 선형가속 [m/s^2].
             `ImuCfg.gravity_bias=(0,0,0)` 으로 두면 중력이 빠진 순수 운동가속이 된다.
         params: 임계값과 캘리브레이션 상수.
+        r_cam_imu: (3,3) 외부 파라미터 override. 팔이 움직이면 매 스텝 바뀌므로
+            `ArmCameraExtrinsics.r_cam_imu(joint_pos)` 결과를 넘긴다.
+            None 이면 `params.r_cam_imu` 를 쓴다(팔 고정 자세용).
     """
     if depth.dim() == 4:
         depth = depth[..., 0]
@@ -243,7 +255,7 @@ def fuse(
     finite = torch.isfinite(depth) & (depth > 0)
 
     # ---- 2. IMU -> 카메라 프레임의 중력/상방/전방/우방 축 ----
-    g_cam = gravity_in_camera(projected_gravity_b, params)  # (N,3) 아래 방향
+    g_cam = gravity_in_camera(projected_gravity_b, params, r_cam_imu)  # (N,3) 아래 방향
     up = -g_cam
     ez = torch.zeros_like(up)
     ez[:, 2] = 1.0

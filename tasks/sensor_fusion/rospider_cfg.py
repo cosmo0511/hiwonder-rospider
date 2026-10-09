@@ -4,20 +4,22 @@
 `urdf_fk.py` 로 뽑은 값이다. 추측값이 아니다. 다만 "서 있는 다리 자세"와
 "PD 게인"은 실기에서 맞춰본 값이 아니라 출발점이다(아래 주석에 표시).
 
-센서를 어디에 붙였나
---------------------
-실기의 뎁스 카메라는 **팔 끝(link4)** 에 달려 있다. 그대로 쓰면 카메라 자세가 팔
-조인트에 따라 바뀌어서, 융합에 필요한 `R_cam<-imu` 가 상수가 아니게 된다. 그래서:
+센서를 어디에 붙였나 — 실기 URDF 그대로
+----------------------------------------
+- **뎁스 카메라**: 실기와 같이 **팔 끝 `link4`** 에 붙인다. `link4 -> depth_cam_frame`
+  은 fixed 조인트 둘(camera_connect_joint, depth_cam_joint)을 거치므로 **팔 각도와
+  무관한 상수**다(`urdf_fk.py --base link4` 로 확인했다). 그래서 prim 을 link4 밑에
+  걸고 그 상수 오프셋만 주면, **팔이 움직이면 카메라도 따라 움직인다.**
+- **IMU**: `base_link` 에 붙인다. URDF 의 `imu_joint` 오프셋 그대로.
 
-- 팔은 **관측 자세로 고정**한다 (joint2=0.85, joint3=-1.60, joint4=-1.26).
-  이 자세에서 카메라는 전방을 보며 약 24.2도 아래로 숙는다.
-- 카메라 prim 은 그 자세에서 계산된 `base_link` 기준 고정 오프셋으로 붙인다.
-  겉보기(팔 끝에 달린 모양)와 실제 센서 위치가 일치한다.
-- IMU 도 `base_link` 에 붙인다. URDF 의 imu_joint 오프셋 그대로다.
+융합에 필요한 `R_cam<-imu` 는 팔 자세에 따라 바뀌므로 **매 스텝 계산한다**
+(`extrinsics.ArmCameraExtrinsics`). joint3 를 0.4 rad 만 움직여도 이 행렬 성분이
+0.385 바뀐다 — 상수로 두면 바닥 제거가 통째로 틀어진다.
 
-덕분에 `R_cam<-imu` 가 상수가 되고, 그게 바로 fusion.py 의 기본값이다.
-팔을 다른 자세로 쓰고 싶으면 `urdf_fk.py --joints ...` 로 값을 다시 뽑아
-`FusionParams.r_cam_imu` 와 아래 `CAM_*` 상수를 같이 갱신하면 된다.
+URDF 에는 `<sensor>` 나 플러그인 태그가 **없다.** 즉 URDF 는 "센서가 어디에 붙어
+있는지"(링크와 조인트)만 알려 주고, 실제로 이미지를 찍고 가속도를 재는 것은
+Isaac Lab 의 `Camera` / `Imu` 다. 장착 위치·방향은 실기 값이고, 해상도·화각 같은
+센서 제원은 [미확인] 추정값이다(실기 카메라 모델 스펙을 못 구했다).
 """
 
 from __future__ import annotations
@@ -38,15 +40,21 @@ BASE_HEIGHT = 0.11607
 ARM_OBSERVE_POSE = {"joint1": 0.0, "joint2": 0.85, "joint3": -1.60, "joint4": -1.26, "joint5": 0.0}
 """카메라가 전방 약 24.2도 하향을 보는 팔 자세. 다리 제어와 무관하게 고정한다."""
 
+CAM_POS_IN_LINK4 = (-0.04171, 0.0, 0.05932)
+"""`link4` 기준 depth_cam_frame 위치 [m]. **팔 각도와 무관한 상수.**"""
+
+CAM_QUAT_IN_LINK4_WORLD_CONV = (0.70710678, 0.0, -0.70710678, 0.0)
+"""같은 변환의 회전, **world 규약**(전방 +X, 상방 +Z) 쿼터니언 (w,x,y,z).
+
+link4 의 +Z(팔이 뻗은 방향)가 카메라의 시선축이 된다. ROS 광학 규약으로 넣으려면
+(0.70710678, 0, 0, -0.70710678) 이다.
+"""
+
 CAM_POS_IN_BASE = (0.13125, 0.0013, 0.25086)
-"""위 자세에서 depth_cam_frame 의 base_link 기준 위치 [m]."""
+"""참고값: 관측 자세에서 depth_cam_frame 의 base_link 기준 위치 [m].
 
-CAM_QUAT_IN_BASE_WORLD_CONV = (0.97753, 0.0, 0.210794, 0.0)
-"""같은 자세에서의 회전, **world 규약**(전방 +X, 상방 +Z) 쿼터니언 (w,x,y,z).
-
-`CameraCfg.OffsetCfg(convention="world")` 에 그대로 넣는다. +Y 축 기준 24.3도 회전
-= 전방 축이 그만큼 아래를 향한다는 뜻이라 사람이 읽기 쉽다. ROS 광학 규약
-(convention="ros") 으로 넣고 싶으면 (-0.38422, 0.593616, -0.593607, 0.384222) 이다.
+카메라를 팔이 아니라 몸체에 고정하고 싶을 때(팔을 아예 안 움직이는 실험) 쓴다.
+그때의 회전은 world 규약으로 (0.97753, 0, 0.210794, 0) 이다.
 """
 
 IMU_POS_IN_BASE = (0.0048416, 0.011168, -0.0057398)
@@ -149,7 +157,10 @@ def make_camera_cfg(width: int = 160, height: int = 120, with_rgb: bool = True) 
 
     # 수평 화각 70도: 2*atan(20.955 / (2*14.96)) = 70.0도
     return CameraCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/base_link/depth_cam",
+        # 실기와 같이 팔 끝에 붙인다. 팔이 움직이면 카메라도 따라 움직인다.
+        # (merge_fixed_joints=True 로 변환하면 depth_cam_link 는 link4 에 흡수되므로
+        #  prim 을 link4 밑에 만들고 상수 오프셋을 준다.)
+        prim_path="{ENV_REGEX_NS}/Robot/link4/depth_cam",
         update_period=0.0,  # 매 물리 스텝 갱신 -> IMU 와 측정 시점이 어긋나지 않는다.
         width=width,
         height=height,
@@ -160,8 +171,8 @@ def make_camera_cfg(width: int = 160, height: int = 120, with_rgb: bool = True) 
             clipping_range=(0.05, 3.0),
         ),
         offset=CameraCfg.OffsetCfg(
-            pos=CAM_POS_IN_BASE,
-            rot=CAM_QUAT_IN_BASE_WORLD_CONV,
+            pos=CAM_POS_IN_LINK4,
+            rot=CAM_QUAT_IN_LINK4_WORLD_CONV,
             convention="world",
         ),
         # 먼 곳/하늘은 inf 로 들어온다. fusion.py 가 isfinite 로 걸러낸다.
@@ -169,7 +180,7 @@ def make_camera_cfg(width: int = 160, height: int = 120, with_rgb: bool = True) 
     )
 
 
-def make_imu_cfg() -> ImuCfg:
+def make_imu_cfg(debug_vis: bool = False) -> ImuCfg:
     """IMU.
 
     `gravity_bias=(0,0,0)` 으로 둔 이유: 기본값 (0,0,9.81) 은 실제 IMU 처럼 정지
@@ -187,7 +198,8 @@ def make_imu_cfg() -> ImuCfg:
         offset=ImuCfg.OffsetCfg(pos=IMU_POS_IN_BASE, rot=IMU_QUAT_IN_BASE),
         gravity_bias=(0.0, 0.0, 0.0),
         update_period=0.0,
-        debug_vis=False,
+        # GUI 로 볼 때 켜면 IMU 가속도 방향 화살표가 씬에 그려진다.
+        debug_vis=debug_vis,
     )
 
 
@@ -217,6 +229,7 @@ def build_scene_cfg(
     cam_height: int = 120,
     with_rgb: bool = True,
     num_envs: int = 1,
+    debug_vis: bool = False,
 ) -> FusionSceneCfg:
     """실험 조건 하나를 씬 설정으로 만든다.
 
@@ -229,7 +242,7 @@ def build_scene_cfg(
     cfg = FusionSceneCfg(num_envs=num_envs, env_spacing=4.0)
     cfg.robot = make_robot_cfg(usd_path, pitch_deg=pitch_deg)
     cfg.camera = make_camera_cfg(cam_width, cam_height, with_rgb)
-    cfg.imu = make_imu_cfg()
+    cfg.imu = make_imu_cfg(debug_vis=debug_vis)
 
     # 카메라의 월드 x 위치. 몸체를 숙이면 카메라가 앞으로 나온다.
     pitch = math.radians(pitch_deg)
