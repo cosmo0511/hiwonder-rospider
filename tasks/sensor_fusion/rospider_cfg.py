@@ -73,6 +73,19 @@ def pitch_to_quat(pitch_deg: float) -> tuple[float, float, float, float]:
     return (math.cos(half), 0.0, math.sin(half), 0.0)
 
 
+def rpy_to_quat(roll_deg: float, pitch_deg: float, yaw_deg: float = 0.0):
+    """roll/pitch/yaw [deg] 를 쿼터니언 (w,x,y,z) 로. URDF 와 같은 Z-Y-X 순서."""
+    cr, sr = math.cos(math.radians(roll_deg) / 2), math.sin(math.radians(roll_deg) / 2)
+    cp, sp = math.cos(math.radians(pitch_deg) / 2), math.sin(math.radians(pitch_deg) / 2)
+    cy, sy = math.cos(math.radians(yaw_deg) / 2), math.sin(math.radians(yaw_deg) / 2)
+    return (
+        cr * cp * cy + sr * sp * sy,
+        sr * cp * cy - cr * sp * sy,
+        cr * sp * cy + sr * cp * sy,
+        cr * cp * sy - sr * sp * cy,
+    )
+
+
 def make_robot_cfg(
     usd_path: str,
     pitch_deg: float = 0.0,

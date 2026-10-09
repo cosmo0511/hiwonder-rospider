@@ -542,6 +542,42 @@ python tasks/sensor_fusion/run_fusion_demo.py --enable_cameras --gui --scene mix
 
 패널 생성에 실패해도 시뮬레이션은 계속 돈다(콘솔에 이유가 찍힌다).
 
+#### 5.5.1b 슬라이더로 직접 기울여 보기 (`--teleop`)
+
+로봇이 수평으로 가만히 서 있으면 IMU 는 당연히 `pitch 0 / roll 0 / gravity (0,0,-1)`
+을 읽는다. **값이 변하는 걸 보려면 몸을 기울여야 한다.**
+
+패널의 `MANUAL CONTROL` 슬라이더를 끌면 몸체가 그만큼 기울고, IMU 와 융합 판정이
+실시간으로 따라온다. 키보드 대신 슬라이더를 쓴 이유는, Kit 의 키 입력은 뷰포트에
+포커스가 있어야 들어오는데 사용자는 패널을 보고 있기 때문이다.
+
+**베이스가 고정되지 않은 USD 가 필요하다.** `fix_base=True` 로 변환한 것은 루트가
+월드에 용접돼 있어 포즈를 써도 안 움직인다.
+
+```bash
+# 한 번만: 떠 있는 베이스로 변환 (파일 이름이 rospider_float.usd 로 분리된다)
+python tasks/sensor_fusion/02_urdf_to_usd.py --no-fix-base
+
+# 수동 조작
+python tasks/sensor_fusion/run_fusion_demo.py --enable_cameras --teleop \
+       --usd assets/usd/rospider_float.usd --scene stairs --rendering_mode performance
+```
+
+슬라이더를 끌면서 볼 것:
+
+| 슬라이더 | 패널에서 따라 변하는 값 |
+|---|---|
+| body pitch | `IMU pitch`, `gravity in IMU frame`, 높이맵의 띠 위치 |
+| 20도 넘게 | `d_roi` 가 무너진다(바닥을 장애물로 오인). `d_fused` 는 유지 |
+| 25도 넘게 | 판정이 `STOP_TILT` 로 바뀐다 — IMU 단독 상위 조건 |
+
+**`d_fused` 가 기울여도 거의 그대로인 것**이 이 과제의 핵심 장면이다. 노션 노트의
+"조건을 바꾸어 결과를 비교" 에 슬라이더 0도 / 15도 / 25도 스크린샷 세 장이면 된다.
+
+> `--teleop` 는 루트를 매 스텝 직접 옮기므로 `linear accel` 은 의미 없는 값이 된다
+> (충격 판정은 자동으로 꺼진다). 자세(중력 방향)는 정확하고, 바닥 제거는 그 값만
+> 쓰므로 융합의 핵심 기능은 멀쩡하다.
+
 #### 5.5.2 "Isaac Sim is not responding" 창이 뜰 때
 
 **그냥 냅두면 된다. 계속 돌아간다.**

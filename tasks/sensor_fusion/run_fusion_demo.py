@@ -105,6 +105,16 @@ parser.add_argument("--out", default="outputs/sensor_fusion", help="결과(CSV/P
 parser.add_argument("--tag", default="run", help="결과 파일 이름에 붙일 꼬리표")
 parser.add_argument("--gui", action="store_true", help="창을 띄운다")
 parser.add_argument(
+    "--teleop",
+    action="store_true",
+    help="패널의 슬라이더로 몸체를 직접 기울인다. --gui 를 자동으로 켠다.\n"
+    "**베이스가 고정되지 않은 USD 가 필요하다**:\n"
+    "  python tasks/sensor_fusion/02_urdf_to_usd.py --no-fix-base\n"
+    "  python tasks/sensor_fusion/run_fusion_demo.py --teleop "
+    "--usd assets/usd/rospider_float.usd --scene stairs\n"
+    "fix_base=True 로 변환한 USD 는 루트가 월드에 용접돼 있어 포즈를 써도 안 움직인다.",
+)
+parser.add_argument(
     "--imu_arrow",
     action="store_true",
     help="GUI 에 IMU 가속도 화살표 마커를 그린다. **기본은 꺼짐.** "
@@ -132,6 +142,8 @@ args_cli = parser.parse_args()
 
 # 카메라 센서가 있는 씬은 이 플래그가 필수다. 깜빡하기 쉬우니 강제로 켠다.
 args_cli.enable_cameras = True
+if args_cli.teleop:
+    args_cli.gui = True
 args_cli.headless = not args_cli.gui
 
 app_launcher = AppLauncher(args_cli)
@@ -148,7 +160,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from extrinsics import ArmCameraExtrinsics  # noqa: E402
 from kit_exit import shutdown  # noqa: E402
 from fusion import DECISION_NAMES, FusionParams, fuse  # noqa: E402
-from rospider_cfg import ARM_OBSERVE_POSE, build_scene_cfg, pitch_to_quat  # noqa: E402
+from rospider_cfg import ARM_OBSERVE_POSE, build_scene_cfg, pitch_to_quat, rpy_to_quat  # noqa: E402
 
 
 # --------------------------------------------------------------------------- 그림
@@ -257,7 +269,9 @@ def main() -> None:
     moving = args_cli.motion != "none"
     move_arm = args_cli.motion in ("arm", "both")
     move_base = args_cli.motion in ("rock", "both")
-    ignore_impact = args_cli.ignore_impact or move_base
+    # 루트를 매 스텝 직접 옮기면 속도 차분으로 구하는 lin_acc_b 가 의미를 잃는다.
+    # 자세(projected_gravity_b)는 정확하므로 바닥 제거는 그대로 동작한다.
+    ignore_impact = args_cli.ignore_impact or move_base or args_cli.teleop
 
     sim = sim_utils.SimulationContext(sim_utils.SimulationCfg(dt=1 / 120, device=args_cli.device))
     scene_cfg = build_scene_cfg(
@@ -294,7 +308,9 @@ def main() -> None:
         try:
             from ui_panel import FusionPanel  # noqa: PLC0415
 
-            panel = FusionPanel(args_cli.cam_width, args_cli.cam_height)
+            panel = FusionPanel(
+                args_cli.cam_width, args_cli.cam_height, enable_control=args_cli.teleop
+            )
             print(
                 "[GUI] 'RosPider | Depth + IMU Fusion' 창을 화면 왼쪽 위에 띄웠다."
                 " 안 보이면 Isaac Sim 창을 옮겨 보거나, 아래 터미널 출력을 보면 된다."
@@ -395,6 +411,34 @@ def main() -> None:
     move_obstacle = args_cli.scene == "box"
     if not move_obstacle:
         dists = dists[:1]
+
+    if args_cli.teleop:
+        # ---------------- (C) 수동 조작 ----------------
+        # 슬라이더가 가리키는 자세로 매 스텝 루트를 써 준다. fix_base=False 로 변환한
+        # USD 여야 한다(고정 베이스는 월드에 용접돼 포즈를 무시한다).
+        print("\n[teleop] 패널의 MANUAL CONTROL 슬라이더를 끌어 몸체를 기울여 보자.")
+        print("         IMU pitch/roll 과 융합 판정이 따라 바뀐다. 창을 닫으면 끝난다.\n")
+        step = 0
+        while simulation_app.is_running():
+            cmd_pitch, cmd_roll = (panel.read_control() if panel else (0.0, 0.0))
+            rs = root_state0.clone()
+            rs[:, 3:7] = torch.tensor(
+                rpy_to_quat(cmd_roll, args_cli.pitch_deg + cmd_pitch),
+                device=rs.device,
+                dtype=rs.dtype,
+            ).unsqueeze(0)
+            rs[:, :3] += scene.env_origins
+            robot.write_root_pose_to_sim(rs[:, :7])
+            robot.write_root_velocity_to_sim(torch.zeros_like(rs[:, 7:]))
+            robot.set_joint_position_target(hold_target)
+            scene.write_data_to_sim()
+            sim.step()
+            scene.update(sim_dt)
+            if step % 6 == 0:
+                depth, intrinsics, imu, result, q = read_and_fuse()
+                update_panel(q)
+            step += 1
+        return
 
     if not moving:
         # ---------------- (A) 정지 스윕 ----------------

@@ -33,6 +33,7 @@ _DIM = 0xFF999999
 _VAL = 0xFFEEEEEE
 _CAM = 0xFF8CD2FF   # 뎁스 카메라 섹션 (파랑)
 _IMU = 0xFF8CFFB0   # IMU 섹션 (초록)
+_CTL = 0xFF66CCFF   # 수동 조작 섹션 (주황)
 
 
 def _to_rgb8(array: np.ndarray, vmin: float, vmax: float, cmap_name: str) -> np.ndarray:
@@ -59,7 +60,13 @@ def _to_rgb8(array: np.ndarray, vmin: float, vmax: float, cmap_name: str) -> np.
 class FusionPanel:
     """Isaac Sim 창에 떠 있는 실시간 패널."""
 
-    def __init__(self, cam_width: int = 160, cam_height: int = 120, history: int = 300) -> None:
+    def __init__(
+        self,
+        cam_width: int = 160,
+        cam_height: int = 120,
+        history: int = 300,
+        enable_control: bool = False,
+    ) -> None:
         import omni.ui as ui  # noqa: PLC0415
 
         self._ui = ui
@@ -108,6 +115,32 @@ class FusionPanel:
                 self._labels["acc"] = self._row("  linear accel")
                 ui.Separator()
 
+                # --- 수동 조작 (슬라이더로 몸체를 기울인다) ---
+                # 키보드 대신 슬라이더를 쓴 이유: Kit 의 키 입력은 뷰포트에 포커스가
+                # 있어야 들어오는데, 사용자가 패널을 보고 있으면 포커스가 거기 없다.
+                # 슬라이더는 보면서 바로 끌 수 있다.
+                self.cmd_pitch_deg = 0.0
+                self.cmd_roll_deg = 0.0
+                self._sliders = {}
+                if enable_control:
+                    ui.Separator()
+                    ui.Label(
+                        "MANUAL CONTROL  (drag to tilt the body)",
+                        style={"font_size": 16, "color": _CTL},
+                    )
+                    try:
+                        self._sliders["pitch"] = self._slider("  body pitch [deg]", -30.0, 30.0)
+                        self._sliders["roll"] = self._slider("  body roll  [deg]", -30.0, 30.0)
+
+                        def _reset() -> None:
+                            for sl in self._sliders.values():
+                                sl.model.set_value(0.0)
+
+                        ui.Button("reset to level", height=26, clicked_fn=_reset)
+                    except Exception as exc:
+                        ui.Label(f"(슬라이더 생성 실패: {exc})", style={"color": _DIM})
+                        print(f"[ui_panel] 슬라이더 실패(패널은 계속): {exc}")
+
                 # --- 센서 이미지 (실패해도 위쪽 숫자는 남는다) ---
                 ui.Label("WHAT THE FUSION SEES", style={"font_size": 16, "color": _HEAD})
                 try:
@@ -155,6 +188,27 @@ class FusionPanel:
             ui.Label(text, width=235, style={"font_size": size, "color": _DIM})
             value = ui.Label("--", style={"font_size": size, "color": _VAL})
         return value
+
+    def _slider(self, text: str, lo: float, hi: float):
+        """'이름 [슬라이더]' 한 줄. 위젯을 돌려준다."""
+        ui = self._ui
+        with ui.HStack(height=24):
+            ui.Label(text, width=150, style={"font_size": 14, "color": _DIM})
+            widget = ui.FloatSlider(min=lo, max=hi, step=0.5)
+            widget.model.set_value(0.0)
+        return widget
+
+    def read_control(self) -> tuple[float, float]:
+        """슬라이더가 가리키는 (pitch, roll) [deg]. 슬라이더가 없으면 (0, 0)."""
+        if not self._sliders:
+            return 0.0, 0.0
+        try:
+            return (
+                float(self._sliders["pitch"].model.get_value_as_float()),
+                float(self._sliders["roll"].model.get_value_as_float()),
+            )
+        except Exception:
+            return 0.0, 0.0
 
     @staticmethod
     def _fmt_dist(value: float) -> str:
