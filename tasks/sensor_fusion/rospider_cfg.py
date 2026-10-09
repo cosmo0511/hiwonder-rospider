@@ -139,7 +139,9 @@ def make_robot_cfg(usd_path: str, pitch_deg: float = 0.0) -> ArticulationCfg:
     )
 
 
-def make_camera_cfg(width: int = 160, height: int = 120, with_rgb: bool = True) -> CameraCfg:
+def make_camera_cfg(
+    width: int = 160, height: int = 120, with_rgb: bool = True, arm_body: str = "link4"
+) -> CameraCfg:
     """뎁스 카메라.
 
     - ``distance_to_image_plane`` 이 뎁스다(단위 m, 광학 z축 기준). ``"depth"`` 는
@@ -160,7 +162,7 @@ def make_camera_cfg(width: int = 160, height: int = 120, with_rgb: bool = True) 
         # 실기와 같이 팔 끝에 붙인다. 팔이 움직이면 카메라도 따라 움직인다.
         # (merge_fixed_joints=True 로 변환하면 depth_cam_link 는 link4 에 흡수되므로
         #  prim 을 link4 밑에 만들고 상수 오프셋을 준다.)
-        prim_path="{ENV_REGEX_NS}/Robot/link4/depth_cam",
+        prim_path="{ENV_REGEX_NS}/Robot/" + arm_body + "/depth_cam",
         update_period=0.0,  # 매 물리 스텝 갱신 -> IMU 와 측정 시점이 어긋나지 않는다.
         width=width,
         height=height,
@@ -180,7 +182,7 @@ def make_camera_cfg(width: int = 160, height: int = 120, with_rgb: bool = True) 
     )
 
 
-def make_imu_cfg(debug_vis: bool = False) -> ImuCfg:
+def make_imu_cfg(debug_vis: bool = False, base_body: str = "base_link") -> ImuCfg:
     """IMU.
 
     `gravity_bias=(0,0,0)` 으로 둔 이유: 기본값 (0,0,9.81) 은 실제 IMU 처럼 정지
@@ -194,7 +196,7 @@ def make_imu_cfg(debug_vis: bool = False) -> ImuCfg:
         # prim 이 사라진다. 그래서 base_link 에 붙이고 URDF 오프셋을 직접 준다.
         # (--no-merge-fixed-joints 로 변환했다면 prim_path 를 ".../imu_link" 로,
         #  offset 을 기본값으로 두면 된다.)
-        prim_path="{ENV_REGEX_NS}/Robot/base_link",
+        prim_path="{ENV_REGEX_NS}/Robot/" + base_body,
         offset=ImuCfg.OffsetCfg(pos=IMU_POS_IN_BASE, rot=IMU_QUAT_IN_BASE),
         gravity_bias=(0.0, 0.0, 0.0),
         update_period=0.0,
@@ -278,6 +280,8 @@ def build_scene_cfg(
     num_envs: int = 1,
     debug_vis: bool = False,
     scene: str = "box",
+    base_body: str = "base_link",
+    arm_body: str = "link4",
 ) -> FusionSceneCfg:
     """실험 조건 하나를 씬 설정으로 만든다.
 
@@ -286,6 +290,9 @@ def build_scene_cfg(
             base 기준 x 는 여기에 카메라 오프셋을 더한 값이 된다.
         obstacle_height: 장애물 높이 [m]. 0.02 처럼 낮게 주면 '넘어갈 수 있는 단차' 가
             되고, 융합은 이걸 장애물로 세지 않아야 한다.
+        base_body: IMU 를 붙일 리짓바디 이름. 변환 설정에 따라 base_link 가 아니라
+            base_footprint 로 합쳐질 수 있다. `02_urdf_to_usd.py --inspect` 로 확인한다.
+        arm_body: 카메라를 붙일 리짓바디 이름(기본 link4).
         scene: 무엇을 놓을지.
             - ``"box"``   : 빨간 상자 하나(움직일 수 있다). 거리 스윕 실험용.
             - ``"stairs"``: 계단 4단. 높이맵이 띠로 갈라져 융합 과정이 눈에 보인다.
@@ -293,8 +300,8 @@ def build_scene_cfg(
     """
     cfg = FusionSceneCfg(num_envs=num_envs, env_spacing=4.0)
     cfg.robot = make_robot_cfg(usd_path, pitch_deg=pitch_deg)
-    cfg.camera = make_camera_cfg(cam_width, cam_height, with_rgb)
-    cfg.imu = make_imu_cfg(debug_vis=debug_vis)
+    cfg.camera = make_camera_cfg(cam_width, cam_height, with_rgb, arm_body=arm_body)
+    cfg.imu = make_imu_cfg(debug_vis=debug_vis, base_body=base_body)
 
     # 카메라의 월드 x 위치. 몸체를 숙이면 카메라가 앞으로 나온다.
     pitch = math.radians(pitch_deg)

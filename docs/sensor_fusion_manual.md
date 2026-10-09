@@ -426,6 +426,15 @@ python tasks/sensor_fusion/02_urdf_to_usd.py
 [움직이는 조인트 29개] coxa_LF_joint, ..., joint1, ..., tibla_RR_joint
 ```
 
+이미 만든 USD 를 다시 들여다보려면(변환 없이, 물리 없이 안전하게):
+
+```bash
+python tasks/sensor_fusion/02_urdf_to_usd.py --inspect
+```
+
+아티큘레이션 루트가 어디에 붙어 있는지, 바디/조인트 이름이 무엇인지 찍어 준다.
+`Failed to create articulation` 이 났을 때 제일 먼저 돌릴 것이다.
+
 **이 출력의 바디 이름 목록을 꼭 보자.** `base_link` 가 있으면 `rospider_cfg.py` 의
 센서 prim 경로(`{ENV_REGEX_NS}/Robot/base_link/depth_cam`) 가 맞다. 없고
 `base_footprint` 같은 다른 이름이면 그 이름으로 바꿔야 한다.
@@ -882,6 +891,8 @@ prim 이 **RigidBody 여야** 하므로(`UsdPhysics.RigidBodyAPI` 를 확인한�
 |---|---|
 | `No module named 'ament_index_python'` (xacro 전개 중) | include 가 치환 안 된 원본을 다시 읽었다. `01_xacro_to_urdf.py` 가 `$(find ...)/urdf/` 를 임시 디렉터리로 돌리는 부분을 건드리지 말 것 |
 | `Failed to find a prim at path expression: .../imu_link` | `merge_fixed_joints=True` 로 흡수됐다. `base_link` 에 붙이고 `OffsetCfg` 를 주거나 `--no-merge-fixed-joints` 로 변환 |
+| `RuntimeError: Failed to create articulation at: .../Robot/root_joint` | USD 는 멀쩡히 열리는데(GUI 로 로봇이 보이는데) Isaac Lab 이 PhysX 아티큘레이션을 못 만든 것이다. 순서대로: ① `python tasks/sensor_fusion/02_urdf_to_usd.py --inspect` 로 ArticulationRootAPI 가 **정확히 하나**인지, 바디 이름이 무엇인지 확인 ② 터미널에서 traceback **위쪽**의 PhysX/`[Error]` 줄을 찾는다(진짜 이유가 거기 있다) ③ `--root-link ''` 로 다시 변환해 본다(아래 설명) |
+| 위 오류가 `--root-link ''` 로 고쳐진 경우 | 루트 링크를 base_link 로 다시 뿌리내린 것이 임포터의 `root_joint` 와 꼬였던 것이다. 그러면 바디 이름이 `base_footprint` 로 바뀌므로 `run_fusion_demo.py --base_body base_footprint` 로 넘긴다 |
 | `Failed to find a RigidBodyAPI for the prim paths` | `Imu` 를 더미/비강체 prim 에 걸었다. 강체 prim 에 걸어야 한다 |
 | 뎁스가 전부 `inf` | `--enable_cameras` 를 빼먹었거나, `clipping_range` 의 far 가 너무 짧거나, 카메라가 허공을 본다. `--gui` 로 시선을 확인 |
 | `data_types` 에 뎁스가 없다 | `CameraCfg.data_types` 기본값은 `["rgb"]` 다. `"distance_to_image_plane"` 을 명시해야 한다 |

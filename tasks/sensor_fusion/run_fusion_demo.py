@@ -112,6 +112,12 @@ parser.add_argument(
     "경고를 남긴다(무해하지만 거슬리면 끄자).",
 )
 parser.add_argument("--dump_asset_info", action="store_true", help="바디/조인트 이름만 찍고 종료")
+parser.add_argument(
+    "--base_body",
+    default="base_link",
+    help="IMU 를 붙일 리짓바디 이름. `02_urdf_to_usd.py --inspect` 가 찍어 주는 목록에서 고른다.",
+)
+parser.add_argument("--arm_body", default="link4", help="카메라를 붙일 리짓바디 이름")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -255,6 +261,8 @@ def main() -> None:
         num_envs=1,
         debug_vis=args_cli.gui and not args_cli.no_imu_arrow,
         scene=args_cli.scene,
+        base_body=args_cli.base_body,
+        arm_body=args_cli.arm_body,
     )
     scene = InteractiveScene(scene_cfg)
     sim.reset()

@@ -47,7 +47,34 @@ parser.add_argument(
     help="모든 링크를 개별 바디로 남긴다. imu_link 가 prim 으로 살아 있어 센서 부착이 직관적이지만,"
     " 질량/관성이 없는 더미 링크(depth_cam_frame 등) 때문에 PhysX 경고가 날 수 있다.",
 )
+parser.add_argument(
+    "--root-link",
+    default="base_link",
+    help="어떤 링크를 아티큘레이션 루트로 삼을지. 빈 문자열('')이면 URDF 의 자연스러운 "
+    "루트(base_footprint)를 쓴다. "
+    "'Failed to create articulation' 가 나면 여기부터 '' 로 바꿔 보자.",
+)
+parser.add_argument(
+    "--fix-base",
+    dest="fix_base",
+    action="store_true",
+    default=True,
+    help="base 를 월드에 고정한다(기본). 인식 과제라 보행이 필요 없고, 자세를 정확히 줄 수 있다.",
+)
+parser.add_argument(
+    "--no-fix-base",
+    dest="fix_base",
+    action="store_false",
+    help="base 를 띄운다. 파일 이름도 rospider_float.usd 로 바뀐다.",
+)
 parser.add_argument("--view", action="store_true", help="변환 후 GUI 로 띄워 확인")
+parser.add_argument(
+    "--inspect",
+    action="store_true",
+    help="변환하지 않고 **이미 있는 USD 를 열어** 구조만 찍는다. 아티큘레이션 루트가 "
+    "어디에 붙어 있는지, 바디/조인트 이름이 무엇인지 본다. 물리를 안 돌리므로 "
+    "'Failed to create articulation' 상황에서도 안전하게 쓸 수 있다.",
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -65,6 +92,13 @@ import isaaclab.sim as sim_utils  # noqa: E402
 from isaaclab.sim.converters import UrdfConverter, UrdfConverterCfg  # noqa: E402
 
 
+def _usd_name() -> str:
+    """--no-fix-base 로 만든 것은 파일을 따로 둔다. 둘을 섞으면 헷갈린다."""
+    if args_cli.usd_name != "rospider.usd":
+        return args_cli.usd_name
+    return "rospider.usd" if args_cli.fix_base else "rospider_float.usd"
+
+
 def convert() -> Path:
     urdf_path = Path(args_cli.urdf).resolve()
     if not urdf_path.exists():
@@ -78,15 +112,18 @@ def convert() -> Path:
     cfg = UrdfConverterCfg(
         asset_path=str(urdf_path),
         usd_dir=str(Path(args_cli.usd_dir).resolve()),
-        usd_file_name=args_cli.usd_name,
+        usd_file_name=_usd_name(),
         force_usd_conversion=True,
         # 센서 융합 과제에서는 보행이 목표가 아니다. base 를 고정해 두면 다리 제어 없이도
         # 로봇이 서 있고, 자세(기울기)를 우리가 원하는 값으로 정확히 줄 수 있다.
         # 보행까지 가려면 False 로 바꾸고 다리 PD 게인부터 다시 잡아야 한다.
-        fix_base=True,
-        # URDF 의 루트는 base_footprint(더미) 다. base_link 를 루트로 지정해
-        # merge 후에도 prim 이름이 base_link 로 남게 한다.
-        root_link_name="base_link",
+        fix_base=args_cli.fix_base,
+        # URDF 의 루트는 base_footprint(더미) 다. base_link 를 루트로 지정하면 merge 후에도
+        # prim 이름이 base_link 로 남아 센서 경로를 적기 편하다. 다만 이렇게 트리를
+        # 다시 뿌리내리면 임포터가 만드는 root_joint 가 꼬일 수 있다
+        # ("Failed to create articulation at: .../root_joint").
+        # 그때는 --root-link '' 로 두고, 바뀐 바디 이름을 --base_body 로 넘기면 된다.
+        root_link_name=args_cli.root_link or None,
         merge_fixed_joints=args_cli.merge_fixed_joints,
         # STL 은 visual 과 collision 이 같은 파일이다. convex hull 로 단순화하면
         # 다리 접촉 계산이 가벼워진다. 발끝 모양이 중요해지면 convex_decomposition.
@@ -111,26 +148,53 @@ def convert() -> Path:
 
 
 def report(usd_path: Path) -> None:
-    """변환 결과의 링크/조인트 이름을 찍는다. 센서 prim 경로를 정할 때 필요하다."""
+    """USD 구조를 찍는다. 물리를 안 돌리므로 아티큘레이션이 깨져 있어도 안전하다.
+
+    Isaac Lab 의 `Articulation` 은 `UsdPhysics.ArticulationRootAPI` 가 붙은 prim 을
+    **정확히 하나** 찾아서 PhysX 뷰를 만든다. 그게 어디에 붙어 있는지가
+    "Failed to create articulation at: ..." 을 푸는 첫 단서다.
+    """
     from pxr import Usd, UsdPhysics  # noqa: PLC0415
 
     stage = Usd.Stage.Open(str(usd_path))
-    bodies, joints = [], []
+    bodies, joints, fixed, roots = [], [], [], []
     for prim in stage.Traverse():
+        path = prim.GetPath().pathString
+        if prim.HasAPI(UsdPhysics.ArticulationRootAPI):
+            roots.append(path)
         if prim.HasAPI(UsdPhysics.RigidBodyAPI):
             bodies.append(prim.GetName())
-        if prim.IsA(UsdPhysics.Joint) and not prim.IsA(UsdPhysics.FixedJoint):
-            joints.append(prim.GetName())
+        if prim.IsA(UsdPhysics.Joint):
+            (fixed if prim.IsA(UsdPhysics.FixedJoint) else joints).append(prim.GetName())
+
+    default_prim = stage.GetDefaultPrim()
+    print(f"\n[기본 prim] {default_prim.GetPath() if default_prim else '(없음)'}")
+    print(f"\n[아티큘레이션 루트 {len(roots)}개] {roots or '(없음!)'}")
+    if len(roots) != 1:
+        print(
+            "  ** Isaac Lab 은 ArticulationRootAPI 가 붙은 prim 이 정확히 하나여야 한다. **\n"
+            "     0개면 변환이 잘못된 것이고, 2개 이상이면 어느 쪽을 쓸지 몰라 실패한다."
+        )
     print(f"\n[리짓바디 {len(bodies)}개] {', '.join(sorted(bodies))}")
     print(f"\n[움직이는 조인트 {len(joints)}개] {', '.join(sorted(joints))}")
+    print(f"\n[고정 조인트 {len(fixed)}개] {', '.join(sorted(fixed))}")
     print(
         "\n센서 prim 경로는 위 리짓바디 이름에서 고른다."
-        " base_link 가 보이면 rospider_cfg.py 기본값이 맞다."
-        " 안 보이면(예: base_footprint 로 합쳐졌다면) 그 이름으로 바꿔야 한다."
+        " base_link 와 link4 가 보이면 rospider_cfg.py 기본값이 맞다."
+        " 다르면 run_fusion_demo.py 에 --base_body / --arm_body 로 넘기면 된다."
     )
 
 
 def main() -> None:
+    if args_cli.inspect:
+        # 변환하지 않고 기존 USD 만 들여다본다.
+        target = Path(args_cli.usd_dir) / _usd_name()
+        if not target.exists():
+            raise SystemExit(f"{target} 가 없습니다. 먼저 --inspect 없이 돌려 변환하세요.")
+        print(f"[검사] {target}")
+        report(target)
+        return
+
     usd_path = convert()
     report(usd_path)
 
