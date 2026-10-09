@@ -353,13 +353,10 @@ def main() -> None:
             return
         d = depth[0].squeeze(-1) if depth.dim() == 4 else depth[0]
         cam_down = math.degrees(math.asin(max(-1.0, min(1.0, -float(ext.cam_pose_in_base(q)[1][2, 2])))))
-        panel.update(
-            result,
-            d.cpu().numpy(),
-            imu.projected_gravity_b[0].cpu().numpy(),
-            imu.lin_acc_b[0].cpu().numpy(),
-            cam_down,
-        )
+        # imu_link 는 base 대비 yaw -90도라, 그대로 쓰면 roll/pitch 가 뒤바뀐다.
+        # base 프레임으로 돌려서 넘긴다.
+        g_base = ext.r_base_imu @ imu.projected_gravity_b[0].cpu().numpy()
+        panel.update(result, d.cpu().numpy(), g_base, imu.lin_acc_b[0].cpu().numpy(), cam_down)
 
     def log_row(**extra) -> dict:
         row = {
@@ -551,9 +548,18 @@ def main() -> None:
             if step % 6 == 0:
                 depth, intrinsics, imu, result, q = read_and_fuse()
                 update_panel(q)
-                # 패널이 안 뜨는 환경도 있으므로 터미널에도 같은 값을 한 줄로 찍는다.
-                # 같은 줄을 덮어써서 스크롤을 더럽히지 않는다.
-                sys.stdout.write("\r" + result.summary() + "   ")
+                # 패널이 안 뜨는 환경도 있으므로 터미널에도 짧게 한 줄 찍는다.
+                # 터미널 폭(보통 80자)을 넘으면 \r 덮어쓰기가 안 되고 줄이 쌓이므로
+                # summary() 전체가 아니라 핵심만 줄여서 쓴다.
+                g_base = ext.r_base_imu @ imu.projected_gravity_b[0].cpu().numpy()
+                pitch_deg = math.degrees(math.atan2(float(g_base[0]), -float(g_base[2])))
+                d_f = result.d_fused[0].item()
+                sys.stdout.write(
+                    f"\rpitch{pitch_deg:+5.1f} d_f{d_f:6.3f} d_roi{result.d_roi[0].item():6.3f}"
+                    f" px{int(result.n_obstacle_px[0].item()):5d} "
+                    f"{DECISION_NAMES[int(result.decision[0])]:<11s}"
+                    f"/{DECISION_NAMES[int(result.decision_roi[0])]:<7s}"
+                )
                 sys.stdout.flush()
             step += 1
 
