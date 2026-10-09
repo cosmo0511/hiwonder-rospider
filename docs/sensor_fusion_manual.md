@@ -737,6 +737,7 @@ prim 이 **RigidBody 여야** 하므로(`UsdPhysics.RigidBodyAPI` 를 확인한�
 | `data_types` 에 뎁스가 없다 | `CameraCfg.data_types` 기본값은 `["rgb"]` 다. `"distance_to_image_plane"` 을 명시해야 한다 |
 | 로봇이 바닥을 뚫거나 다리가 꺾인다 | 다리 조인트 목표가 0 이라 그렇다. GUI 로 보면서 coxa/femur/tibla 부호를 찾는다. `fix_base=True` 라 넘어지지는 않는다 |
 | 카메라가 천장을 본다 | 팔 조인트가 0 이다. `ARM_OBSERVE_POSE` 를 적용했는지, 그리고 팔 게인이 자세를 붙잡는지 확인 |
+| `(isaac_lab)` 이 프롬프트에 안 붙고 에러도 없음 | 대개 환경은 잡혀 있고 표시만 없다. `which python` 이 `/opt/conda/envs/isaac_lab/bin/python` 이면 그냥 진행. 5.2절 참고 |
 | `No module named 'omni'` | 고장 아니다. `AppLauncher` 뒤에서만 import 가능 |
 | `No module named 'isaaclab'` | `isaaclab.sh -i` 가 실패를 종료코드에 안 싣는다. `bash /opt/isaaclab-steps/diag.sh` |
 | VRAM OOM / 느림 | `--cam_width 96 --cam_height 72 --no_rgb`, `num_envs=1`, `--gui` 끄기 |
