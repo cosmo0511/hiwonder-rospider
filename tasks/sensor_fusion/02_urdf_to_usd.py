@@ -51,8 +51,11 @@ parser.add_argument("--view", action="store_true", help="변환 후 GUI 로 띄�
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
-if args_cli.view:
-    args_cli.headless = False
+# AppLauncher 의 기본값은 **GUI 켜짐**이다(`HEADLESS` 환경변수 기본 0, `--headless` 는
+# store_true 라 기본 False). 변환만 할 때 창이 뜨면 VRAM 을 3~4 GB 먼저 먹고,
+# X11 이 안 잡힌 환경에서는 그대로 실패한다. 그래서 기본을 헤드리스로 뒤집고
+# `--view` 일 때만 창을 띄운다.
+args_cli.headless = not args_cli.view
 
 # ---- 여기서 Kit 이 뜬다. 이 줄 위에서는 omni.* 를 import 할 수 없다. ----
 app_launcher = AppLauncher(args_cli)
@@ -131,17 +134,24 @@ def main() -> None:
     usd_path = convert()
     report(usd_path)
 
-    if args_cli.view:
-        print("\n[GUI] 씬에 세워 본다. 창을 닫으면 종료된다.")
-        sim = sim_utils.SimulationContext(sim_utils.SimulationCfg(dt=1 / 120, device=args_cli.device))
-        sim_utils.GroundPlaneCfg().func("/World/ground", sim_utils.GroundPlaneCfg())
-        sim_utils.DomeLightCfg(intensity=3000.0).func("/World/light", sim_utils.DomeLightCfg(intensity=3000.0))
-        spawn_cfg = sim_utils.UsdFileCfg(usd_path=str(usd_path))
-        spawn_cfg.func("/World/Robot", spawn_cfg, translation=(0.0, 0.0, 0.12))
-        sim.reset()
-        sim.set_camera_view(eye=[0.9, 0.9, 0.6], target=[0.0, 0.0, 0.15])
-        while simulation_app.is_running():
-            sim.step()
+    if not args_cli.view:
+        print("\n창으로 보려면:  python tasks/sensor_fusion/02_urdf_to_usd.py --view")
+        return
+
+    print("\n[GUI] 씬에 세워 본다. 창을 닫으면 종료된다.")
+    sim = sim_utils.SimulationContext(sim_utils.SimulationCfg(dt=1 / 120, device=args_cli.device))
+
+    ground_cfg = sim_utils.GroundPlaneCfg()
+    ground_cfg.func("/World/ground", ground_cfg)
+    light_cfg = sim_utils.DomeLightCfg(intensity=3000.0)
+    light_cfg.func("/World/light", light_cfg)
+    robot_cfg = sim_utils.UsdFileCfg(usd_path=str(usd_path))
+    robot_cfg.func("/World/Robot", robot_cfg, translation=(0.0, 0.0, 0.12))
+
+    sim.reset()
+    sim.set_camera_view(eye=[0.9, 0.9, 0.6], target=[0.0, 0.0, 0.15])
+    while simulation_app.is_running():
+        sim.step()
 
 
 if __name__ == "__main__":

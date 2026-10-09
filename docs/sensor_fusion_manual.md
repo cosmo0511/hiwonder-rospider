@@ -361,6 +361,51 @@ python tasks/sensor_fusion/test_fusion.py
 성공 표시 — 마지막 줄이 `전부 통과` 다. 7절의 표가 이 출력이다.
 **여기서 실패하면 Isaac 으로 넘어가지 말자.** 융합 수식이나 상수가 틀린 것이다.
 
+### 5.4.1 어떤 스크립트가 창(GUI)을 띄우나
+
+**대부분은 창이 안 뜨는 게 정상이다.** 창이 안 뜬다고 실패한 게 아니다.
+
+| 스크립트 | Isaac Sim | 창이 뜨나 |
+|---|---|---|
+| `00_fetch_description.sh` | 안 씀 | ✗ (git clone 일 뿐) |
+| `01_xacro_to_urdf.py` | 안 씀 | ✗ (XML 처리일 뿐) |
+| `urdf_fk.py` | 안 씀 | ✗ (numpy 계산일 뿐) |
+| `test_fusion.py` | **안 씀** | ✗ — Kit 을 아예 import 하지 않는다 |
+| `02_urdf_to_usd.py` | 띄움 | ✗ 기본은 헤드리스 |
+| `02_urdf_to_usd.py --view` | 띄움 | **✓** |
+| `run_fusion_demo.py` | 띄움 | ✗ 기본은 헤드리스 |
+| `run_fusion_demo.py --gui` | 띄움 | **✓** |
+| `run_all_conditions.sh` | 띄움 | ✗ 전부 헤드리스 |
+
+**창을 보고 싶으면 `--view` 또는 `--gui` 를 붙여야 한다.** 기본을 헤드리스로 둔 이유는
+GUI 렌더러가 VRAM 을 3~4 GB 먼저 먹기 때문이다. 8 GB 에서는 이게 크다.
+
+### 5.4.2 `--view` / `--gui` 를 붙였는데도 창이 안 뜨면
+
+순서대로 확인한다.
+
+```bash
+# ① 호스트 터미널에서
+echo $DISPLAY                 # 보통 :0 또는 :1. 비어 있으면 X 세션이 아니다
+xhost +local:root             # 매 로그인마다 1회 필요
+
+# ② 컨테이너 안에서
+echo $DISPLAY                 # 호스트와 같은 값이어야 한다
+ls /tmp/.X11-unix/            # X0 같은 소켓이 보여야 한다
+```
+
+| 증상 | 원인과 해법 |
+|---|---|
+| 컨테이너의 `$DISPLAY` 가 비어 있음 | `docker compose run` 을 **`$DISPLAY` 가 설정된 터미널에서** 실행해야 한다. compose 가 `DISPLAY=${DISPLAY:-:0}` 로 넘긴다. ssh 로 붙었다면 X 포워딩이 없어서 그렇다 |
+| `/tmp/.X11-unix/` 가 비어 있음 | 호스트에 X 서버가 없다. 순수 Wayland 세션이면 Xwayland 가 떠 있는지 확인 |
+| `Authorization required, but no authorization protocol specified` | 호스트에서 `xhost +local:root` 를 안 했다. **컨테이너를 띄우기 전에** 해야 한다 |
+| 창은 뜨는데 까맣게만 나옴 | 셰이더 컴파일 중이다. 첫 실행은 5~10분 기다린다 |
+| `Failed to create a vulkan device` / GPU 관련 | 호스트에서 `docker run --rm --gpus all nvidia/cuda:12.8.1-base-ubuntu22.04 nvidia-smi` 가 되는지 먼저 확인 |
+
+창 없이도 과제는 **전부 완성된다.** 결과 PNG 4패널(`outputs/sensor_fusion/*.png`)이 센서
+출력과 판정을 다 담고 있어서, 노션 노트의 "실험 결과" 는 그걸로 채울 수 있다. 창은
+"장면 스크린샷" 한 장과 다리 자세 눈대중에만 쓴다.
+
 ### 5.5 Kit 을 띄우는 단계
 
 여기서부터 Isaac Sim 이 뜬다. **첫 실행은 셰이더 컴파일로 5~10분 멈춘 듯 보인다.**
@@ -747,7 +792,9 @@ prim 이 **RigidBody 여야** 하므로(`UsdPhysics.RigidBodyAPI` 를 확인한�
 | `No module named 'isaaclab'` | `isaaclab.sh -i` 가 실패를 종료코드에 안 싣는다. `bash /opt/isaaclab-steps/diag.sh` |
 | VRAM OOM / 느림 | `--cam_width 96 --cam_height 72 --no_rgb`, `num_envs=1`, `--gui` 끄기 |
 | `LLVM ERROR: out of memory` | VRAM 이 아니라 **시스템 RAM** 이다 |
-| 창이 안 뜨고 `Authorization required...` | 호스트에서 `xhost +local:root` |
+| 창이 안 뜬다 | 대부분 정상이다. `--view` / `--gui` 를 붙여야 뜬다. 5.4.1절의 표를 보자 |
+| `--view`/`--gui` 를 붙였는데도 안 뜬다 | 5.4.2절의 X11 점검 순서 |
+| 창이 안 뜨고 `Authorization required...` | 호스트에서 `xhost +local:root`. **컨테이너를 띄우기 전에** 해야 한다 |
 | `d_fused` 가 터무니없이 작다 | `R_cam<-imu` 가 팔 자세와 안 맞는다. `urdf_fk.py` 로 다시 뽑아 `FusionParams.r_cam_imu` 를 갱신 |
 
 ## 11. 참고 자료와 출처
