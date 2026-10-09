@@ -118,6 +118,13 @@ parser.add_argument(
     help="IMU 를 붙일 리짓바디 이름. `02_urdf_to_usd.py --inspect` 가 찍어 주는 목록에서 고른다.",
 )
 parser.add_argument("--arm_body", default="link4", help="카메라를 붙일 리짓바디 이름")
+parser.add_argument(
+    "--articulation_root",
+    default=None,
+    help="아티큘레이션 루트 prim 을 직접 지정한다(Robot prim 기준 상대 경로). "
+    "'Failed to create articulation' 이 날 때 '' (Robot prim 자체) 나 '/base_link' 를 "
+    "넣어 보면 USD 재변환 없이 빠르게 가릴 수 있다.",
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -263,6 +270,7 @@ def main() -> None:
         scene=args_cli.scene,
         base_body=args_cli.base_body,
         arm_body=args_cli.arm_body,
+        articulation_root=args_cli.articulation_root,
     )
     scene = InteractiveScene(scene_cfg)
     sim.reset()

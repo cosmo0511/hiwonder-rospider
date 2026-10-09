@@ -73,16 +73,27 @@ def pitch_to_quat(pitch_deg: float) -> tuple[float, float, float, float]:
     return (math.cos(half), 0.0, math.sin(half), 0.0)
 
 
-def make_robot_cfg(usd_path: str, pitch_deg: float = 0.0) -> ArticulationCfg:
+def make_robot_cfg(
+    usd_path: str, pitch_deg: float = 0.0, articulation_root: str | None = None
+) -> ArticulationCfg:
     """RosPider ArticulationCfg.
 
     Args:
         usd_path: 02_urdf_to_usd.py 가 만든 USD 경로.
         pitch_deg: 몸체를 앞으로 숙이는 각도 [deg]. 실험 조건을 바꾸는 손잡이다.
             USD 를 ``fix_base=True`` 로 변환했으므로 이 자세가 그대로 유지된다.
+        articulation_root: 아티큘레이션 루트 prim 을 **직접 지정**한다
+            (``prim_path`` 에 이어 붙는 상대 경로. 예: ``""`` 는 Robot prim 자체,
+            ``"/root_joint"``, ``"/base_link"``).
+            None 이면 Isaac Lab 이 ArticulationRootAPI 를 가진 prim 을 찾아 쓴다.
+
+            ``Failed to create articulation at: .../root_joint`` 가 날 때,
+            PhysX 가 실제로 등록한 위치와 Isaac Lab 이 찾아낸 위치가 다를 수 있다.
+            그때 여기에 다른 값을 넣어 보면 빠르게 가린다(USD 재변환 불필요).
     """
     return ArticulationCfg(
         prim_path="{ENV_REGEX_NS}/Robot",
+        articulation_root_prim_path=articulation_root,
         spawn=sim_utils.UsdFileCfg(
             usd_path=usd_path,
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
@@ -282,6 +293,7 @@ def build_scene_cfg(
     scene: str = "box",
     base_body: str = "base_link",
     arm_body: str = "link4",
+    articulation_root: str | None = None,
 ) -> FusionSceneCfg:
     """실험 조건 하나를 씬 설정으로 만든다.
 
@@ -299,7 +311,7 @@ def build_scene_cfg(
             - ``"mixed"`` : 넘어갈 수 있는 2 cm 단차 + 계단 + 빨간 상자. 시연용.
     """
     cfg = FusionSceneCfg(num_envs=num_envs, env_spacing=4.0)
-    cfg.robot = make_robot_cfg(usd_path, pitch_deg=pitch_deg)
+    cfg.robot = make_robot_cfg(usd_path, pitch_deg=pitch_deg, articulation_root=articulation_root)
     cfg.camera = make_camera_cfg(cam_width, cam_height, with_rgb, arm_body=arm_body)
     cfg.imu = make_imu_cfg(debug_vis=debug_vis, base_body=base_body)
 
