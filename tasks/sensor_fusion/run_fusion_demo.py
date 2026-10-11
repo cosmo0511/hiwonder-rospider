@@ -780,12 +780,20 @@ def main() -> None:
         elif not args_cli.no_stop_on_danger:
             print("[결과] 끝까지 멈추지 않았다. 장애물까지 못 갔거나, 판정이 DANGER 에 "
                   "닿지 않았다 — --walk_seconds 를 늘리거나 로그의 d_true_m 을 보자.")
+        # **저장 순서가 중요하다.** 아래 셋 중 마지막 PNG 만 카메라를 다시 읽는데,
+        # 창을 닫아서 루프를 빠져나온 경우 Kit 이 이미 내려가는 중이라 거기서 예외가
+        # 난다. 그걸 먼저 두면 CSV 쓰는 코드에 도달하지 못해 **직접 몬 세션의 로그가
+        # 통째로 날아간다**(실제로 한 번 날렸다). 메모리에 있는 것부터 쓰고, 시뮬을
+        # 건드리는 것은 맨 뒤에서 try 로 감싼다.
         if args_cli.record:
             save_gif(out_dir / f"{args_cli.tag}.gif", frames)
         if rows:
-            save_png(out_dir / f"{args_cli.tag}_last.png",
-                     render_frame(*grab("final frame")))
             write_rows(out_dir / f"{args_cli.tag}_log.csv", rows)
+            try:
+                save_png(out_dir / f"{args_cli.tag}_last.png",
+                         render_frame(*grab("final frame")))
+            except Exception as exc:  # noqa: BLE001
+                print(f"[건너뜀] 마지막 프레임을 못 찍었다(창을 닫아 Kit 이 내려가는 중): {exc}")
         return
 
     if args_cli.teleop:
@@ -921,9 +929,14 @@ def main() -> None:
 
         if args_cli.record:
             save_gif(out_dir / f"{args_cli.tag}.gif", frames)
-        rgb, depth_np, height_np, mask_np, title = grab("final frame")
-        save_png(out_dir / f"{args_cli.tag}_last.png",
-                 render_frame(rgb, depth_np, height_np, mask_np, title))
+        # 보행 분기와 같은 이유로 try 로 감싼다 — 창을 닫아 루프가 끝났으면
+        # 카메라를 다시 읽다가 예외가 나고, 아래 CSV 쓰기에 도달하지 못한다.
+        try:
+            rgb, depth_np, height_np, mask_np, title = grab("final frame")
+            save_png(out_dir / f"{args_cli.tag}_last.png",
+                     render_frame(rgb, depth_np, height_np, mask_np, title))
+        except Exception as exc:  # noqa: BLE001
+            print(f"[건너뜀] 마지막 프레임을 못 찍었다(Kit 이 내려가는 중): {exc}")
 
     if rows:
         print()
