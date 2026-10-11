@@ -354,7 +354,7 @@ ROS 2 Humble 이 22.04 용으로 빌드돼 있기 때문이다. 자세한 건 �
 | CUDA (베이스 이미지) | 12.8.1 | |
 | ROS 2 | Humble | python 3.10 쪽. **이 과제는 쓰지 않는다** |
 | 추가 설치 | `xacro`, `matplotlib` | `pip install` (5.3절) |
-| 이 과제 설정 | `num_envs=1`, 카메라 160x120, 수평화각 70도 | 8 GB VRAM 기준 |
+| 이 과제 설정 | `num_envs=1`, 카메라 160x120, 수평화각 63.0도(실기 캘리브레이션) | 8 GB VRAM 기준 |
 
 실기 로봇(RosPider 보드) 은 Jetson Orin Nano + Ubuntu 22.04 + ROS 2 Humble 로 알려져
 있으나 **이 레포에서 확인한 바 없다.** 보드에서 `echo $ROS_DISTRO` 로 확인해야 한다.
