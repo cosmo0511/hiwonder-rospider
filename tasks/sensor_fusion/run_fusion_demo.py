@@ -244,7 +244,14 @@ from fusion import (  # noqa: E402
     FusionParams,
     fuse,
 )
-from rospider_cfg import ARM_OBSERVE_POSE, build_scene_cfg, pitch_to_quat, rpy_to_quat  # noqa: E402
+from rospider_cfg import (  # noqa: E402
+    ARM_OBSERVE_POSE,
+    BASE_HEIGHT,
+    CAM_POS_IN_BASE,
+    build_scene_cfg,
+    pitch_to_quat,
+    rpy_to_quat,
+)
 
 
 # --------------------------------------------------------------------------- 그림
@@ -614,21 +621,41 @@ def main() -> None:
         phase = 0.0
         obstacle_depth = 0.2  # build_scene_cfg 의 상자 깊이
 
+        # 루트에서 카메라까지의 오프셋(몸 기준). 팔을 관측 자세로 붙잡고 있으므로 상수다.
+        # 루트가 base_footprint 면 base_link 높이를 더해야 한다(rospider_cfg 와 같은 규칙).
+        cam_offset_in_root = np.array(CAM_POS_IN_BASE, dtype=float)
+        if args_cli.base_body == "base_footprint":
+            cam_offset_in_root = cam_offset_in_root + np.array([0.0, 0.0, BASE_HEIGHT])
+
+        def _rotate(quat, vec: np.ndarray) -> np.ndarray:
+            """쿼터니언 (w,x,y,z) 으로 벡터를 돌린다."""
+            w = float(quat[0])
+            u = np.array([float(quat[1]), float(quat[2]), float(quat[3])])
+            return vec + 2.0 * w * np.cross(u, vec) + 2.0 * np.cross(u, np.cross(u, vec))
+
         def ground_truth_distance() -> float:
             """카메라에서 장애물 앞면까지의 수평거리 [m]. d_fused 와 맞대 볼 정답이다.
 
-            로봇이 회전하면 '전방'이 달라지므로, 루트 쿼터니언에서 뽑은 **진행 방향**에
+            로봇이 회전하면 '전방'이 달라지므로, 루트 자세로 돌린 **진행 방향**에
             투영한다. 상자 씬이 아니면(계단/혼합) 상자를 멀리 치워 두므로 의미가 없다.
+
+            **카메라 위치를 `camera.data.pos_w` 로 읽지 않는다.** 그렇게 했더니 x 가
+            계속 0 으로 들어와 이 값이 1.0313 m 에 고정됐다(보행 로그에서 확인).
+            루트 포즈는 우리가 직접 쓰거나 PhysX 가 갱신하므로 믿을 수 있어서,
+            루트 + 상수 오프셋으로 카메라 위치를 만든다.
             """
             if not move_obstacle:
                 return float("nan")
-            cam = scene["camera"].data.pos_w[0]
-            obs = obstacle.data.root_pos_w[0]
-            qw, qx, qy, qz = (float(v) for v in robot.data.root_quat_w[0])
-            yaw = math.atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz))
-            dx = float(obs[0] - cam[0])
-            dy = float(obs[1] - cam[1])
-            return dx * math.cos(yaw) + dy * math.sin(yaw) - obstacle_depth / 2.0
+            quat = robot.data.root_quat_w[0]
+            root = robot.data.root_pos_w[0].cpu().numpy().astype(float)
+            cam = root + _rotate(quat, cam_offset_in_root)
+            heading = _rotate(quat, np.array([1.0, 0.0, 0.0]))[:2]
+            norm = float(np.linalg.norm(heading))
+            if norm < 1e-9:  # 몸이 완전히 수직이면 전방이 정의되지 않는다
+                return float("nan")
+            heading = heading / norm
+            obs = obstacle.data.root_pos_w[0].cpu().numpy().astype(float)
+            return float((obs[:2] - cam[:2]) @ heading) - obstacle_depth / 2.0
 
         n_steps = (
             int(args_cli.walk_seconds / sim_dt) if auto_cmd is not None else None
