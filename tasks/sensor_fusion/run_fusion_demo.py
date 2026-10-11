@@ -692,7 +692,9 @@ def main() -> None:
                 step += 1
                 continue
 
-            if step % 6 == 0 or (n_steps is not None and step % 10 == 0):
+            # 매 물리 스텝(120 Hz)마다 융합하면 UI 갱신이 병목이다. 6 스텝마다 =
+            # 20 Hz 로 판정한다. 실기 뎁스 카메라가 30 Hz 인 것과 같은 자릿수다.
+            if step % 6 == 0:
                 depth, intrinsics, imu, result, q = read_and_fuse()
                 update_panel(q)
                 d_true = ground_truth_distance()
