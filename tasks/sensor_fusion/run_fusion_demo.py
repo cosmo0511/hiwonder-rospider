@@ -9,10 +9,25 @@
    `fusion.py` 에 넘겨 하나의 판정을 받는다.
 4. 조건마다 CSV + 4패널 PNG 를 남기고, `--record` 면 움직이는 GIF 까지 만든다.
 
-두 가지 실행 모양
+실행 모양 네 가지
 -----------------
+**(D) WASD 보행** (`--walk`): **이게 과제의 시나리오 그대로다.** 로봇이 걸어가면서
+전방을 판단하고, DANGER 를 내면 **실제로 전진을 멈춘다.** 보행 자체가 몸통을
+끄덕이게 하므로 `--pitch_deg` 로 손수 기울여 놓지 않아도 IMU 가 할 일이 생긴다.
+
+    # 직접 몰기 (W/S 전후, A/D 게걸음, Q/E 회전, SHIFT 가속, SPACE 정지)
+    python tasks/sensor_fusion/run_fusion_demo.py --walk --scene mixed
+
+    # 사람 없이 (헤드리스). run_all_conditions.sh 가 쓰는 형태다.
+    python tasks/sensor_fusion/run_fusion_demo.py --walk --auto_walk 0.10,0,0 \
+        --walk_seconds 14 --tag walk --record
+
+`--walk_mode kinematic`(기본)은 몸통을 명령 속도로 직접 옮긴다 — 항상 안정적이다.
+`--walk_mode physics` 는 PhysX 접지로 진짜 걷는다(베이스 고정 안 한 USD 필요,
+PD 게인이 [미검증]이라 넘어질 수 있다). 자세한 차이는 `--help` 참고.
+
 **(A) 정지 스윕** (`--motion none`, 기본): 로봇을 고정하고 장애물만 옮겨가며
-거리별 판정을 찍는다. 과제의 "조건을 바꾸어 결과를 비교" 용이다.
+거리별 판정을 찍는다. 조건별 숫자를 깨끗하게 뽑을 때 쓴다.
 
 **(B) 모션** (`--motion arm|rock|both`): 로봇을 움직이면서 센서 출력과 판정이
 어떻게 변하는지 본다. `--record` 로 GIF 를 뽑으면 노션 노트의 "영상" 칸이 채워진다.
@@ -126,6 +141,53 @@ parser.add_argument(
     "fix_base=True 로 변환한 USD 는 루트가 월드에 용접돼 있어 포즈를 써도 안 움직인다.",
 )
 parser.add_argument(
+    "--walk",
+    action="store_true",
+    help="**WASD 로 직접 몰면서** 융합 판정을 본다. 창을 자동으로 띄운다.\n"
+    "  W/S 전후, A/D 게걸음, Q/E 회전, SHIFT 가속, SPACE 정지.\n"
+    "--auto_walk 를 같이 주면 사람 없이 정해진 명령으로 걷는다(헤드리스 가능).",
+)
+parser.add_argument(
+    "--walk_mode",
+    choices=["kinematic", "physics"],
+    default="kinematic",
+    help="걷는 방식.\n"
+    "  kinematic (기본): 다리는 보행 궤적대로 움직이고, **몸통은 명령 속도를 적분해**\n"
+    "    직접 옮긴다. 접지 물리가 아니므로 항상 안정적으로 전진한다. 몸통 끄덕임은\n"
+    "    gait.body_sway() 의 합성 모델이다. 융합 데모에는 이쪽이 안전하다.\n"
+    "  physics: 조인트 목표만 주고 **PhysX 의 접지력으로 실제로 걷는다.** IMU 가\n"
+    "    읽는 흔들림이 진짜다. 다만 PD 게인·마찰이 [미검증]이라 넘어질 수 있다.\n"
+    "    **베이스가 고정되지 않은 USD 가 필요하다**: 02_urdf_to_usd.py --no-fix-base",
+)
+parser.add_argument(
+    "--auto_walk",
+    default=None,
+    metavar="VX,VY,WZ",
+    help="키보드 대신 고정 명령으로 걷는다. 예: --auto_walk 0.10,0,0 (전진 0.1 m/s).\n"
+    "헤드리스로 돌아가므로 run_all_conditions.sh 가 이걸 쓴다.",
+)
+parser.add_argument("--walk_seconds", type=float, default=14.0,
+                    help="--auto_walk 로 걸을 시간 [s]")
+parser.add_argument(
+    "--no_stop_on_danger",
+    action="store_true",
+    help="융합이 DANGER/STOP 을 내도 **멈추지 않는다.**\n"
+    "기본은 멈춘다 — 판정이 그냥 숫자로 끝나지 않고 실제 행동으로 이어지는 것이\n"
+    "이 과제가 요구하는 '최종 판단' 이기 때문이다. 멈춘 뒤에도 후진(S)과 회전(Q/E)은\n"
+    "되므로 빠져나올 수 있다. 끄면 로봇이 장애물을 그대로 통과한다(비교용).",
+)
+parser.add_argument("--walk_speed", type=float, default=0.12, help="WASD 한 칸 속도 [m/s]")
+parser.add_argument("--turn_speed", type=float, default=0.8, help="Q/E 한 칸 각속도 [rad/s]")
+parser.add_argument("--gait_period", type=float, default=None, help="보행 주기 [s]")
+parser.add_argument("--step_height", type=float, default=None, help="발 드는 높이 [m]")
+parser.add_argument("--body_height", type=float, default=None, help="몸통 높이 [m]")
+parser.add_argument(
+    "--bump_acc",
+    type=float,
+    default=None,
+    help="충격 정지 임계값 [m/s^2]. 안 주면 모드에 맞는 기본값을 쓴다(아래 설명 출력).",
+)
+parser.add_argument(
     "--imu_arrow",
     action="store_true",
     help="GUI 에 IMU 가속도 화살표 마커를 그린다. **기본은 꺼짐.** "
@@ -155,6 +217,9 @@ args_cli = parser.parse_args()
 args_cli.enable_cameras = True
 if args_cli.teleop:
     args_cli.gui = True
+if args_cli.walk and not args_cli.auto_walk:
+    # 키보드로 몰려면 창이 떠 있어야 한다(carb 키보드 이벤트가 앱 창으로 온다).
+    args_cli.gui = True
 args_cli.headless = not args_cli.gui
 
 app_launcher = AppLauncher(args_cli)
@@ -169,8 +234,16 @@ from isaaclab.scene import InteractiveScene  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from extrinsics import ArmCameraExtrinsics  # noqa: E402
+from gait import GaitParams, HexapodGait, advance_phase  # noqa: E402
 from kit_exit import shutdown  # noqa: E402
-from fusion import DECISION_NAMES, FusionParams, fuse  # noqa: E402
+from fusion import (  # noqa: E402
+    DANGER,
+    DECISION_NAMES,
+    STOP_IMPACT,
+    STOP_TILT,
+    FusionParams,
+    fuse,
+)
 from rospider_cfg import ARM_OBSERVE_POSE, build_scene_cfg, pitch_to_quat, rpy_to_quat  # noqa: E402
 
 
@@ -237,6 +310,31 @@ def save_png(path: Path, frame) -> None:
     print(f"  그림 저장: {path}")
 
 
+def walk_title(t: float, cmd, result, d_true: float) -> str:
+    """보행 프레임의 그림 제목. 명령·자세·세 판정·참값을 한 줄에 담는다."""
+    truth = "n/a" if d_true != d_true else f"{d_true:.2f} m"  # nan 검사
+    return (
+        f"t={t:4.1f}s   cmd=({cmd[0]:+.2f}, {cmd[1]:+.2f}, {cmd[2]:+.2f})   "
+        f"body tilt {result.tilt_deg[0].item():4.1f}deg   true {truth}   =>   "
+        f"FUSED {DECISION_NAMES[int(result.decision[0])]} "
+        f"(d={result.d_fused[0].item():.2f} m)   |   "
+        f"depth-only {DECISION_NAMES[int(result.decision_naive[0])]}   |   "
+        f"fixed-ROI {DECISION_NAMES[int(result.decision_roi[0])]}"
+    )
+
+
+def write_rows(path: Path, rows: list[dict]) -> None:
+    """로그를 CSV 로. 조건마다 `--tag` 가 다르므로 파일이 서로 덮어쓰지 않는다."""
+    if not rows:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"[완료] 로그 {path} ({len(rows)} 행)")
+
+
 def save_gif(path: Path, frames: list, fps: float = 8.0) -> None:
     frames = [f for f in frames if f is not None]
     if not frames:
@@ -280,9 +378,19 @@ def main() -> None:
     moving = args_cli.motion != "none"
     move_arm = args_cli.motion in ("arm", "both")
     move_base = args_cli.motion in ("rock", "both")
+    walk_kinematic = args_cli.walk and args_cli.walk_mode == "kinematic"
     # 루트를 매 스텝 직접 옮기면 속도 차분으로 구하는 lin_acc_b 가 의미를 잃는다.
     # 자세(projected_gravity_b)는 정확하므로 바닥 제거는 그대로 동작한다.
-    ignore_impact = args_cli.ignore_impact or move_base or args_cli.teleop
+    ignore_impact = (
+        args_cli.ignore_impact or move_base or args_cli.teleop or walk_kinematic
+    )
+    if args_cli.walk and args_cli.walk_mode == "physics" and "float" not in usd_path.name:
+        print(
+            f"[경고] --walk_mode physics 인데 USD 가 {usd_path.name} 다. fix_base=True 로\n"
+            "       변환한 USD 는 루트가 월드에 용접돼 있어 **제자리에서 다리만 젓는다.**\n"
+            "       먼저:  python tasks/sensor_fusion/02_urdf_to_usd.py --no-fix-base\n"
+            "       그 뒤:  --usd assets/usd/rospider_float.usd\n"
+        )
 
     sim = sim_utils.SimulationContext(sim_utils.SimulationCfg(dt=1 / 120, device=args_cli.device))
     scene_cfg = build_scene_cfg(
@@ -343,6 +451,15 @@ def main() -> None:
     params = FusionParams(floor_mode=args_cli.floor_mode)
     if ignore_impact:
         params.bump_acc_mps2 = float("inf")
+    elif args_cli.walk:
+        # 물리로 걸으면 **발이 땅에 닿을 때마다** 가속도가 튄다. 서 있을 때를 기준으로
+        # 잡은 6 m/s^2 을 그대로 쓰면 보행 내내 STOP_IMPACT 라 거리 판정이 안 보인다.
+        # 충돌 충격과 보행 발소리를 가르려면 원래는 저역통과가 필요하다(노트의 개선 방향).
+        # 여기서는 임계값만 올려 두고, 그 사실을 출력에 남긴다.
+        params.bump_acc_mps2 = 25.0
+    if args_cli.bump_acc is not None:
+        params.bump_acc_mps2 = args_cli.bump_acc
+        ignore_impact = False
 
     print(
         f"[설정] motion={args_cli.motion}, pitch={args_cli.pitch_deg}deg, "
@@ -431,6 +548,216 @@ def main() -> None:
     move_obstacle = args_cli.scene == "box"
     if not move_obstacle:
         dists = dists[:1]
+
+    if args_cli.walk:
+        # ---------------- (D) WASD 보행 ----------------
+        # 과제의 시나리오가 그대로 돌아가는 모드다. 로봇이 **걸으면서** 전방을 판단한다.
+        # 몸통 끄덕임이 보행에서 저절로 나오므로, --pitch_deg 로 손수 기울여 놓지
+        # 않아도 IMU 가 할 일이 생긴다.
+        gp = GaitParams()
+        if args_cli.gait_period is not None:
+            gp.period_s = args_cli.gait_period
+        if args_cli.step_height is not None:
+            gp.step_height_m = args_cli.step_height
+        if args_cli.body_height is not None:
+            gp.body_height_m = args_cli.body_height
+        gp.max_v_mps = max(gp.max_v_mps, args_cli.walk_speed)
+        gp.max_w_radps = max(gp.max_w_radps, args_cli.turn_speed)
+        gait = HexapodGait(urdf_path, gp)
+
+        # 18개 다리 조인트를 한 번만 색인해 둔다. 매 스텝 이름으로 찾으면 비싸다.
+        leg_joint_names = list(gait.stand_joint_targets().keys())
+        missing = [nm for nm in leg_joint_names if nm not in joint_names]
+        if missing:
+            raise SystemExit(
+                f"USD 에 다리 조인트가 없습니다: {missing}\n"
+                "  python tasks/sensor_fusion/02_urdf_to_usd.py --inspect 로 실제 이름을 확인하세요."
+            )
+        leg_idx = torch.tensor(
+            [joint_names.index(nm) for nm in leg_joint_names], device=robot.device
+        )
+
+        # 키보드. --auto_walk 면 사람 없이 고정 명령으로 돈다.
+        teleop = None
+        auto_cmd = None
+        if args_cli.auto_walk:
+            auto_cmd = tuple(float(v) for v in args_cli.auto_walk.split(","))
+            if len(auto_cmd) != 3:
+                raise SystemExit("--auto_walk 는 'VX,VY,WZ' 세 값입니다. 예: 0.10,0,0")
+        else:
+            try:
+                from keyboard_wasd import HELP, WasdTeleop  # noqa: PLC0415
+
+                teleop = WasdTeleop(v=args_cli.walk_speed, w=args_cli.turn_speed)
+                print("\n" + HELP + "\n")
+            except Exception as exc:  # noqa: BLE001
+                print(f"[경고] 키보드를 못 잡았다({exc}). 제자리에 서 있는다. "
+                      "--auto_walk 로 고정 명령을 주면 사람 없이 돈다.")
+                auto_cmd = (0.0, 0.0, 0.0)
+
+        print(
+            f"[보행] mode={args_cli.walk_mode}, 주기 {gp.period_s}s, "
+            f"발 드는 높이 {gp.step_height_m} m, 몸통 높이 {gp.body_height_m} m\n"
+            f"       속도 상한 {gp.max_v_mps} m/s / {gp.max_w_radps} rad/s, "
+            f"보폭 상한 {gp.max_stride_m} m"
+        )
+        if args_cli.walk_mode == "kinematic":
+            print("       [주의] 운동학 모드다 — 몸통을 명령 속도로 직접 옮기고, 끄덕임은\n"
+                  "              gait.body_sway() 의 합성 모델이다. 접지 물리가 아니다.\n"
+                  "              진짜 접지로 걷게 하려면 --walk_mode physics (USD 는 float).")
+        elif not ignore_impact:
+            print(f"       [주의] 충격 임계값을 {params.bump_acc_mps2} m/s^2 로 올렸다. 보행은 발이\n"
+                  "              닿을 때마다 가속도가 튀어서, 정지 기준(6)으로는 내내 STOP_IMPACT 다.")
+
+        # 기준점. 운동학 모드에서 여기에 적분한 변위를 더한다.
+        world_x = world_y = world_yaw = 0.0
+        phase = 0.0
+        obstacle_depth = 0.2  # build_scene_cfg 의 상자 깊이
+
+        def ground_truth_distance() -> float:
+            """카메라에서 장애물 앞면까지의 수평거리 [m]. d_fused 와 맞대 볼 정답이다.
+
+            로봇이 회전하면 '전방'이 달라지므로, 루트 쿼터니언에서 뽑은 **진행 방향**에
+            투영한다. 상자 씬이 아니면(계단/혼합) 상자를 멀리 치워 두므로 의미가 없다.
+            """
+            if not move_obstacle:
+                return float("nan")
+            cam = scene["camera"].data.pos_w[0]
+            obs = obstacle.data.root_pos_w[0]
+            qw, qx, qy, qz = (float(v) for v in robot.data.root_quat_w[0])
+            yaw = math.atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz))
+            dx = float(obs[0] - cam[0])
+            dy = float(obs[1] - cam[1])
+            return dx * math.cos(yaw) + dy * math.sin(yaw) - obstacle_depth / 2.0
+
+        n_steps = (
+            int(args_cli.walk_seconds / sim_dt) if auto_cmd is not None else None
+        )
+        step = 0
+        blocked = False
+        blocked_at: float | None = None
+        png_every = max(int(2.0 / sim_dt), 1)  # 2초마다 한 장
+        print()
+        while simulation_app.is_running():
+            if n_steps is not None and step >= n_steps:
+                break
+            t = step * sim_dt
+            cmd = auto_cmd if teleop is None else teleop.command()
+            # 인식 -> 행동. 막혔다고 판단하면 **앞으로 가는 성분만** 지운다.
+            # 후진과 회전은 살려 둬야 빠져나올 수 있다.
+            if blocked and not args_cli.no_stop_on_danger:
+                cmd = (min(cmd[0], 0.0), cmd[1], cmd[2])
+            phase = advance_phase(phase, sim_dt, gp.period_s)
+
+            # 다리 18개는 보행 궤적대로, 나머지(팔/그리퍼)는 기본 자세 유지.
+            target = hold_target.clone()
+            angles = gait.joint_targets(phase, cmd)
+            target[:, leg_idx] = torch.tensor(
+                [angles[nm] for nm in leg_joint_names],
+                device=target.device,
+                dtype=target.dtype,
+            )
+            robot.set_joint_position_target(target)
+
+            if walk_kinematic:
+                # 명령 속도를 월드에서 적분한다. 몸 기준 (vx, vy) 를 yaw 로 돌려서 더한다.
+                vx, vy, wz = gait.clip_cmd(cmd)
+                world_yaw += wz * sim_dt
+                world_x += (vx * math.cos(world_yaw) - vy * math.sin(world_yaw)) * sim_dt
+                world_y += (vx * math.sin(world_yaw) + vy * math.cos(world_yaw)) * sim_dt
+                dz, sway_pitch, sway_roll = gait.body_sway(phase, cmd)
+
+                rs = root_state0.clone()
+                rs[:, 0] += world_x
+                rs[:, 1] += world_y
+                rs[:, 2] += dz
+                rs[:, 3:7] = torch.tensor(
+                    rpy_to_quat(
+                        math.degrees(sway_roll),
+                        args_cli.pitch_deg + math.degrees(sway_pitch),
+                        math.degrees(world_yaw),
+                    ),
+                    device=rs.device,
+                    dtype=rs.dtype,
+                ).unsqueeze(0)
+                rs[:, :3] += scene.env_origins
+                robot.write_root_pose_to_sim(rs[:, :7])
+                robot.write_root_velocity_to_sim(torch.zeros_like(rs[:, 7:]))
+
+            scene.write_data_to_sim()
+            sim.step()
+            scene.update(sim_dt)
+
+            if step < 20:  # 초기 안정화
+                step += 1
+                continue
+
+            if step % 6 == 0 or (n_steps is not None and step % 10 == 0):
+                depth, intrinsics, imu, result, q = read_and_fuse()
+                update_panel(q)
+                d_true = ground_truth_distance()
+                was_blocked = blocked
+                blocked = int(result.decision[0]) in (DANGER, STOP_TILT, STOP_IMPACT)
+                if blocked and not was_blocked and not args_cli.no_stop_on_danger:
+                    blocked_at = d_true
+                    print(
+                        f"\n[정지] t={t:.1f}s  {DECISION_NAMES[int(result.decision[0])]} "
+                        f"-> 전진을 막는다. 융합거리 {result.d_fused[0].item():.3f} m, "
+                        f"참값 {d_true:.3f} m"
+                    )
+                rows.append(
+                    log_row(
+                        step=step,
+                        t_s=round(t, 3),
+                        cmd_vx=round(cmd[0], 4),
+                        cmd_vy=round(cmd[1], 4),
+                        cmd_wz=round(cmd[2], 4),
+                        keys=("-" if teleop is None else teleop.pressed),
+                        gait_phase=round(phase, 4),
+                        swing="+".join(gait.swinging(phase)),
+                        d_true_m=round(d_true, 4),
+                        blocked=int(blocked),
+                        obstacle_dist_m=dists[0],
+                    )
+                )
+                if args_cli.record and step % args_cli.record_every == 0:
+                    frames.append(render_frame(*grab(walk_title(t, cmd, result, d_true))))
+                if step % png_every == 0:
+                    save_png(
+                        out_dir / f"{args_cli.tag}_t{t:04.1f}.png",
+                        render_frame(*grab(walk_title(t, cmd, result, d_true))),
+                    )
+                if step % 60 == 0:
+                    keys = "-" if teleop is None else teleop.pressed
+                    sys.stdout.write(
+                        f"\rt={t:5.1f}s [{keys:>12s}] "
+                        f"tilt{result.tilt_deg[0].item():+5.1f} "
+                        f"d_f{result.d_fused[0].item():6.3f} "
+                        f"d_roi{result.d_roi[0].item():6.3f} "
+                        f"참값{d_true:6.3f} "
+                        f"{DECISION_NAMES[int(result.decision[0])]:<11s}"
+                        f"/{DECISION_NAMES[int(result.decision_roi[0])]:<7s}"
+                    )
+                    sys.stdout.flush()
+            step += 1
+
+        print()
+        if blocked_at is not None:
+            print(
+                f"[결과] 참거리 {blocked_at:.3f} m 에서 멈췄다 "
+                f"(DANGER 임계값 {params.d_danger_m} m). "
+                f"차이 {abs(blocked_at - params.d_danger_m) * 100:.1f} cm"
+            )
+        elif not args_cli.no_stop_on_danger:
+            print("[결과] 끝까지 멈추지 않았다. 장애물까지 못 갔거나, 판정이 DANGER 에 "
+                  "닿지 않았다 — --walk_seconds 를 늘리거나 로그의 d_true_m 을 보자.")
+        if args_cli.record:
+            save_gif(out_dir / f"{args_cli.tag}.gif", frames)
+        if rows:
+            save_png(out_dir / f"{args_cli.tag}_last.png",
+                     render_frame(*grab("final frame")))
+            write_rows(out_dir / f"{args_cli.tag}_log.csv", rows)
+        return
 
     if args_cli.teleop:
         # ---------------- (C) 수동 조작 ----------------
@@ -570,12 +897,8 @@ def main() -> None:
                  render_frame(rgb, depth_np, height_np, mask_np, title))
 
     if rows:
-        csv_path = out_dir / f"{args_cli.tag}_log.csv"
-        with csv_path.open("w", newline="", encoding="utf-8") as fh:
-            writer = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
-            writer.writeheader()
-            writer.writerows(rows)
-        print(f"\n[완료] 로그 {csv_path} ({len(rows)} 행)")
+        print()
+        write_rows(out_dir / f"{args_cli.tag}_log.csv", rows)
 
     if not moving and args_cli.record:
         save_gif(out_dir / f"{args_cli.tag}.gif", frames, fps=1.5)

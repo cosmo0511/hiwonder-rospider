@@ -131,6 +131,26 @@ class FusionParams:
     naive_center_frac: float = 0.4
     """뎁스 단독 기준선이 볼 중앙 열의 비율. 융합 쪽 corridor 에 대응."""
 
+    baseline_self_mask: bool = True
+    """기준선에도 **자기 몸 제거와 유효거리 창**(:attr:`d_valid_min_m` ~
+    :attr:`d_valid_max_m`) 을 똑같이 적용할지.
+
+    **켜 두는 것이 공정하다.** 자기 몸을 지우는 건 융합의 기능이 아니라 이 로봇에서
+    뎁스를 쓰려면 누구나 해야 하는 전처리다(카메라가 팔 끝에 달려 그리퍼가 화면
+    중앙에 늘 찍힌다 — :attr:`d_valid_min_m` 참고). 실기의 뎁스 단독 코드도 똑같이 한다.
+
+    끄면 어떻게 되는지는 실측으로 확인했다. Isaac 실행 로그에서 `d_naive` 가 모든
+    조건에서 **0.0642 m 로 고정**됐다 — 장애물이 0.9 m 에 있든 0.25 m 에 있든 자기
+    그리퍼를 보고 항상 DANGER 다. 그러면 "융합이 낫다" 가 아니라 "기준선이 애초에
+    고장" 이 되어 비교가 성립하지 않는다.
+
+    이걸 켜면 기준선은 **제대로 된 뎁스 단독 시스템**이 되고, 그래도 남는 차이가
+    딱 하나다 — **중력 정렬과 높이 기반 바닥 제거.** 그게 이 과제가 주장하는 바다.
+
+    False 로 두면 예전(고장난) 동작을 재현한다. 노트에 "전처리를 안 하면 이렇게
+    된다" 를 같이 싣고 싶을 때만 쓰자.
+    """
+
     roi_top_frac: float = 0.5
     """두 번째 기준선('뎁스 + 고정 ROI')이 쓸 상단 행의 비율.
 
@@ -334,25 +354,40 @@ def fuse(
     decision = torch.where(tilt_deg > params.tilt_stop_deg, torch.full_like(decision, STOP_TILT), decision)
 
     # ---- 7. 비교용 단일 센서 기준선 두 개 ----
+    # 공정하게 맞춘 것: 자기 몸 제거 + 유효거리 창 + 최소 픽셀 수.
+    # 공정하게 다른 것: 중력 정렬과 높이 기반 바닥 제거 — 그게 IMU 가 하는 일이다.
     half = max(int(w * params.naive_center_frac / 2), 1)
     c0, c1 = w // 2 - half, w // 2 + half
+    baseline_ok = finite
+    if params.baseline_self_mask:
+        baseline_ok = (
+            baseline_ok & (depth > params.d_valid_min_m) & (depth < params.d_valid_max_m)
+        )
 
     def grade(dist: torch.Tensor) -> torch.Tensor:
         out = torch.full((n,), CLEAR, dtype=torch.long, device=depth.device)
         out = torch.where(dist < params.d_warn_m, torch.full_like(out, WARN), out)
         return torch.where(dist < params.d_danger_m, torch.full_like(out, DANGER), out)
 
-    def min_depth(rows: slice) -> torch.Tensor:
-        patch = depth[:, rows, c0:c1]
-        ok = finite[:, rows, c0:c1]
-        return torch.where(ok, patch, inf.view(n, 1, 1)).amin(dim=(1, 2))
+    def near_depth(rows: slice) -> torch.Tensor:
+        """그 구역에서 `min_obstacle_px` 번째로 가까운 뎁스.
 
-    # (a) 뎁스 단독: 중앙 밴드 최소 뎁스. 바닥도 장애물로 센다.
-    d_naive = min_depth(slice(None))
+        **최솟값이 아니라 k번째 값**인 이유: 융합 쪽은 장애물로 인정하는 데 최소
+        픽셀 수를 요구하는데(:attr:`min_obstacle_px`), 기준선만 한 픽셀 튄 값으로
+        경고를 내게 두면 기준선에 불리한 비교가 된다. 같은 잣대를 준다.
+        """
+        patch = depth[:, rows, c0:c1].reshape(n, -1)
+        ok = baseline_ok[:, rows, c0:c1].reshape(n, -1)
+        vals = torch.where(ok, patch, inf.view(n, 1))
+        k = min(max(params.min_obstacle_px, 1), vals.shape[1])
+        return vals.kthvalue(k, dim=1).values
+
+    # (a) 뎁스 단독: 중앙 밴드에서 가장 가까운 것. **바닥도 장애물로 센다.**
+    d_naive = near_depth(slice(None))
     decision_naive = grade(d_naive)
     # (b) 뎁스 + 고정 ROI: 화면 위쪽만 봐서 바닥을 피하는 수동 보정.
     roi_rows = max(int(h * params.roi_top_frac), 1)
-    d_roi = min_depth(slice(0, roi_rows))
+    d_roi = near_depth(slice(0, roi_rows))
     decision_roi = grade(d_roi)
 
     return FusionResult(

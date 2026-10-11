@@ -265,6 +265,118 @@ def main() -> int:
     print(f"    (주의) 4단은 숙이면 시야 밖으로 나간다: {level[3]} px -> {tilted[3]} px. "
           f"융합 오류가 아니라 FOV 한계다.")
 
+    print("\n조건 J: 자기 그리퍼가 화면에 찍힐 때 -- 기준선 전처리가 왜 필요한가")
+    # 실기(Isaac) 실행에서 실제로 나온 문제다. 카메라가 팔 끝에 달려 있어 그리퍼가
+    # 화면 중앙 아래에 늘 보이고, outputs/sensor_fusion/run_log.csv 를 보면
+    # d_naive 가 장애물 거리와 무관하게 **0.0642 m 로 고정**돼 있다. 합성 씬에는
+    # 로봇 몸이 없으니 여기서 직접 그려 넣어 같은 상황을 만든다.
+    width, height = 160, 120
+    intrinsics_j = make_intrinsics(width, height, hfov_deg=70.0)
+    depth_j, g_j = render_scene(width, height, intrinsics_j, 0.0, 0.80, 0.15)
+    gripper_depth = 0.064  # 실측 로그의 d_naive 값
+    depth_j[0, int(height * 0.55):int(height * 0.80), int(width * 0.44):int(width * 0.56)] = (
+        gripper_depth
+    )
+    lin_acc_j = torch.zeros((1, 3), dtype=torch.float64)
+
+    r_on = fuse(depth_j, intrinsics_j, g_j, lin_acc_j, FusionParams())
+    r_off = fuse(depth_j, intrinsics_j, g_j, lin_acc_j,
+                 FusionParams(baseline_self_mask=False))
+    print(f"{'J1 전처리 켬 (기본)':34s} {r_on.summary()}")
+    print(f"{'J2 전처리 끔 (예전 동작)':34s} {r_off.summary()}")
+
+    check("J: 융합은 자기 몸에 흔들리지 않는다", abs(r_on.d_fused.item() - 0.80) < 0.05)
+    check("J: 융합 CLEAR 유지", int(r_on.decision) == CLEAR)
+    check("J: 전처리를 켜면 기준선이 그리퍼를 무시한다",
+          r_on.d_naive.item() > FusionParams().d_valid_min_m)
+    check("J: 전처리를 켜면 기준선 값이 그리퍼 없는 조건 A 와 같다",
+          abs(r_on.d_naive.item() - 0.415) < 0.02)
+    check("J: 전처리를 끄면 기준선이 그리퍼를 장애물로 본다",
+          abs(r_off.d_naive.item() - gripper_depth) < 0.005)
+    check("J: 전처리를 끄면 기준선은 거리와 무관하게 DANGER",
+          int(r_off.decision_naive) == DANGER)
+    print("    -> 전처리를 끄면 d_naive 가 장애물이 아니라 자기 그리퍼를 가리킨다"
+          f" ({r_off.d_naive.item():.4f} m). 그 상태로 비교하면 '융합이 낫다' 가 아니라"
+          " '기준선이 고장' 이다.")
+
+    print("\n조건 K: 걸으면서 장애물에 접근 -- 이 과제의 시나리오 그대로")
+    # gait.py 의 보행 위상에서 몸통 끄덕임을 받아, 매 프레임 그 자세로 합성 뎁스를
+    # 다시 렌더링한다. Isaac 없이 **보행 중 판정**을 통째로 돌려 보는 셈이다.
+    # (Kit 단계로 넘어가기 전에 여기서 논리가 맞는지 먼저 확인한다 — 이 레포의 순서다.)
+    try:
+        from gait import GaitParams, HexapodGait, advance_phase  # noqa: PLC0415
+
+        gait_urdf = Path("assets/rospider_description/rospider.urdf")
+        if not gait_urdf.exists():
+            raise FileNotFoundError(gait_urdf)
+        gp = GaitParams()
+        walker = HexapodGait(gait_urdf, gp)
+    except Exception as exc:  # noqa: BLE001
+        print(f"    [건너뜀] 보행 모듈을 못 불러왔다({exc}).")
+        print("              bash tasks/sensor_fusion/00_fetch_description.sh 를 먼저 실행하세요.")
+        walker = None
+
+    if walker is not None:
+        speed = 0.10          # m/s, 전진
+        dt = 1.0 / 30.0       # 30 Hz 로 판정한다고 보자
+        cmd_k = (speed, 0.0, 0.0)
+        dist_k = 1.10         # 시작 거리 [m]
+        phase_k = 0.0
+        track_fused, track_roi, track_naive = [], [], []
+        first_stop = {"fused": None, "roi": None, "naive": None}
+        intrinsics_k = make_intrinsics(160, 120, hfov_deg=70.0)
+
+        while dist_k > 0.18:
+            phase_k = advance_phase(phase_k, dt, gp.period_s)
+            _, sway_pitch, _ = walker.body_sway(phase_k, cmd_k)
+            pitch_k = math.degrees(sway_pitch)
+            depth_k, g_k = render_scene(160, 120, intrinsics_k, pitch_k, dist_k, 0.15)
+            rk = fuse(depth_k, intrinsics_k, g_k,
+                      torch.zeros((1, 3), dtype=torch.float64), FusionParams())
+            track_fused.append(abs(rk.d_fused.item() - dist_k))
+            track_roi.append(abs(rk.d_roi.item() - dist_k))
+            track_naive.append(abs(rk.d_naive.item() - dist_k))
+            for key, dec in (("fused", rk.decision), ("roi", rk.decision_roi),
+                             ("naive", rk.decision_naive)):
+                if first_stop[key] is None and int(dec) == DANGER:
+                    first_stop[key] = dist_k
+            dist_k -= speed * dt
+
+        def worst(values):
+            return max(v for v in values if math.isfinite(v))
+
+        def fmt_stop(v):
+            return "못 멈춤" if v is None else f"{v:.3f} m"
+
+        print(f"    몸통 끄덕임 ±{gp.body_pitch_deg}도, {len(track_fused)} 프레임, "
+              f"1.10 m -> 0.18 m 접근 (전진 {speed} m/s, 판정 {1 / dt:.0f} Hz)")
+        print(f"    거리 오차(최대):  융합 {worst(track_fused) * 100:5.1f} cm   "
+              f"고정ROI {worst(track_roi) * 100:5.1f} cm   "
+              f"뎁스단독 {worst(track_naive) * 100:5.1f} cm")
+        print(f"    DANGER 를 처음 낸 참거리 (임계값 0.300 m):  "
+              f"융합 {fmt_stop(first_stop['fused'])}   "
+              f"고정ROI {fmt_stop(first_stop['roi'])}   "
+              f"뎁스단독 {fmt_stop(first_stop['naive'])}")
+        if first_stop["roi"] is None:
+            print("    -> 고정 ROI 는 끝까지 DANGER 를 못 냈다. **안 멈추는 쪽(false negative)** 이라"
+                  " 오경보보다 위험하다.")
+        if first_stop["naive"] is not None:
+            late = 0.30 - first_stop["naive"]
+            print(f"    -> 뎁스 단독은 {late * 100:.1f} cm 늦게 멈춘다. 최소 뎁스가 바닥까지의"
+                  " **사선 거리**라 실제 전방거리보다 크게 읽히기 때문이다.")
+
+        check("K: 보행 중에도 융합 거리가 참값을 5 cm 안에서 따라간다",
+              worst(track_fused) < 0.05)
+        check("K: 융합이 기준선보다 참값에 가깝다",
+              worst(track_fused) < worst(track_roi)
+              and worst(track_fused) < worst(track_naive))
+        check("K: 융합은 임계값 0.30 m 근처에서 DANGER 를 낸다",
+              first_stop["fused"] is not None
+              and abs(first_stop["fused"] - 0.30) < 0.06)
+        check("K: 기준선은 제때 못 멈추거나 엉뚱한 거리에서 멈춘다",
+              first_stop["roi"] is None or abs(first_stop["roi"] - 0.30) > 0.06
+              or first_stop["naive"] is None or abs(first_stop["naive"] - 0.30) > 0.06)
+
     print("\n" + "=" * 118)
     if failures:
         print(f"실패 {len(failures)}건:")

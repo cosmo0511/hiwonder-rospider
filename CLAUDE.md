@@ -6,13 +6,24 @@
 
 **Hiwonder RosPider** (6족 보행 로봇)를 Isaac Sim / Isaac Lab 에서 시뮬레이션합니다.
 
-목표를 순서대로:
+**해결하려는 상황**: 사람이 WASD 로 원격 조종해 걷는 로봇이, 앞으로 몰리더라도
+부딪칠 것 앞에서는 스스로 멈추고 넘어갈 수 있는 턱에서는 멈추지 않아야 합니다.
+카메라가 팔 끝에 달려 24도 아래를 보고 보행이 몸통을 계속 끄덕이게 하므로, 화면
+좌표에 고정된 규칙은 원리적으로 깨집니다. IMU 의 중력 방향으로 뎁스 점의 높이를
+구해 바닥을 기하학적으로 지웁니다. 자세한 것은 `docs/sensor_fusion_manual.md` 2절.
 
-1. RosPider **URDF 를 올려** USD 로 변환하고 씬에 세우기
-2. **뎁스 카메라 + IMU** 두 센서를 붙이고, 그 정보를 **결합하는 시뮬레이션** 구현
+진척:
 
-지금은 **2번 환경 구축만 끝난 상태**입니다. 로봇 에셋(URDF/USD/메시)도, 태스크 코드도
-아직 레포에 없습니다. `docker/isaaclab/` 이 전부입니다.
+1. ✅ 환경 구축 (`docker/isaaclab/`) — Isaac Sim 5.1 + Isaac Lab 2.3.1
+2. ✅ URDF → USD 변환, 씬에 세우기 (`02_urdf_to_usd.py`)
+3. ✅ 뎁스 + IMU 융합 로직 (`fusion.py`) — 합성 뎁스로 A~K 검증
+4. ✅ 삼각보행 + WASD 조작 (`gait.py`, `keyboard_wasd.py`) — URDF 대조 검증
+5. ✅ **Isaac 안에서 거리 스윕 완주** (2026-10-10, `outputs/sensor_fusion/`)
+6. ⬜ **보행(`--walk`)은 Isaac 안에서 아직 안 돌렸다.** 7절 표를 채우려면 필요
+7. ⬜ 물리 보행(`--walk_mode physics`)이 실제로 걷는지 미확인 (PD 게인 미검증)
+
+과제 코드는 `tasks/sensor_fusion/` 에 있습니다. 로봇 에셋(URDF/USD/메시)은
+`.gitignore` 대상이라 `00_fetch_description.sh` 로 받아옵니다.
 
 ## 하드웨어 (이 제약이 설계를 많이 좌우합니다)
 
@@ -176,8 +187,15 @@ GUI 렌더러가 3~4GB 를 먼저 먹기 때문입니다. **다만 URDF 를 올�
 
 ## 아직 검증 안 된 것 (사실로 쓰지 마세요)
 
-- **`50_verify.sh` 완주 기록 없음.** Kit 기동(GPU 인식, Vulkan)까지는 확인했지만
-  `[SMOKE-OK]` 를 본 적이 없습니다
+- **보행을 Isaac 안에서 돌린 기록이 없습니다.** `gait.py` 는 URDF 대조로 검증했고
+  (`test_gait.py`), 합성 뎁스로 "걸으면서 판단" 까지 돌려 봤지만(`test_fusion.py`
+  조건 K), Kit 을 띄워 실제로 걷게 한 적은 없습니다
+- **`gait.GaitParams` 는 전부 출발점입니다.** 주기 1.2 s, 발 드는 높이 3.5 cm,
+  몸통 높이 0.12 m — 작업공간과 조인트 한계 안에 든다는 것만 확인했습니다
+- **운동학 보행의 몸통 끄덕임(±3.5도)은 합성값입니다.** `gait.body_sway()` 가 보행
+  위상에 물려 넣은 사인파이지 접지 물리에서 나온 값이 아닙니다. **측정값처럼 쓰지
+  마세요.** 진짜 값은 `--walk_mode physics` 로 돌려 IMU 를 읽어야 나옵니다
+- **다리 PD 게인 미검증.** `rospider_cfg.py` 의 stiffness 20 / damping 1 은 출발점입니다
 - **RosPider 실기의 ROS 배포판 미확인.** 컨테이너는 Humble 입니다. 실기가 다르면
   DDS 상호운용이 보장되지 않습니다. 보드에서 `echo $ROS_DISTRO` 로 확인 필요
 - **Dockerfile 의 full 스테이지(한 번에 빌드)는 끝까지 돌려본 적이 없습니다.**
