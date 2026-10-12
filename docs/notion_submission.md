@@ -1,7 +1,7 @@
 # [센서융합 과제] 학번_이름_RosPider 보행 중 뎁스+IMU 전방 안전 판단
 
 > 제목의 `학번_이름`과 아래 표의 학번·이름을 채워야 합니다.
-> 이미지는 `outputs/sensor_fusion/` 의 파일을 노션에 직접 업로드해 주십시오.
+> 이미지는 `docs/images/` 에 들어 있습니다. 노션에는 해당 파일을 직접 업로드해 주십시오.
 
 ## 1. 기본 정보
 
@@ -77,7 +77,7 @@ IMU 가 뎁스 점군을 중력에 정렬시키고, **정렬된 좌표에서만 
 변경할 때마다 시뮬레이터를 다시 기동할 필요가 없습니다. 계단(4단, 단 높이 5 cm) 및
 2 cm 턱 장면도 함께 구성하였습니다.
 
-![장면 전체 모습](outputs/sensor_fusion/walk_t02.0.png)
+![장면 전체 모습](images/walk_t02.0.png)
 
 ### 센서 위치·방향·설정
 
@@ -187,7 +187,7 @@ decision = where(tilt_deg > 25.0, STOP_TILT, decision)   # IMU 기여 (상위 �
 임계값 0.30 m 에서 정지하였고 참값과 5 mm 차이입니다. 정지 후 전진 명령이 0 으로
 바뀌어 **판정이 행동으로 연결된 과정이 로그에 기록되어 있습니다.**
 
-![보행 중 접근하여 정지](outputs/sensor_fusion/walk.gif)
+![보행 중 접근하여 정지](images/walk.gif)
 
 ### 조건 2 — 몸체를 20도 숙임 (IMU 의 필요성)
 
@@ -205,8 +205,8 @@ decision = where(tilt_deg > 25.0, STOP_TILT, decision)   # IMU 기여 (상위 �
 - **뎁스 단독은 0.70 m 부터 DANGER** 입니다. 70 cm 전방에 장애물이 있는데 정지를
   요구합니다.
 
-![수평 자세](outputs/sensor_fusion/level_d0.70.png)
-![20도 숙임 — 같은 장애물, 같은 임계값](outputs/sensor_fusion/pitch20_d0.70.png)
+![수평 자세](images/level_d0.70.png)
+![20도 숙임 — 같은 장애물, 같은 임계값](images/pitch20_d0.70.png)
 
 ### 조건 3 — 통과 가능한 2 cm 턱
 
@@ -236,7 +236,7 @@ decision = where(tilt_deg > 25.0, STOP_TILT, decision)   # IMU 기여 (상위 �
 **이 분리는 IMU 없이 만들 수 없습니다.** 뎁스만으로는 "앞에 무언가 있다"까지가
 전부이고, 그것이 바닥인지 5 cm 단인지 20 cm 단인지 구분할 수 없습니다.
 
-![계단 — 높이맵이 단별로 분리됨](outputs/sensor_fusion/stairs_d0.90.png)
+![계단 — 높이맵이 단별로 분리됨](images/stairs_d0.90.png)
 
 ---
 
