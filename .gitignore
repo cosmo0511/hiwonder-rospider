@@ -8,3 +8,6 @@ outputs/
 __pycache__/
 *.py[cod]
 .venv/
+
+# 강화학습 로그 / 체크포인트
+logs/
