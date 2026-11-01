@@ -23,7 +23,7 @@
 7. ⬜ 물리 보행(`--walk_mode physics`)이 실제로 걷는지 미확인 (PD 게인 미검증)
 8. ⬜ **장애물 넘기 강화학습** (`tasks/obstacle_rl/`, 2026-11-01) — 지형(실물 코스 맵 1/2 + 단독 장애물 타일,
    그레이팅 메시, 굴러가는 파이프)과 환경/학습/평가 코드 작성. **지형 numpy 검사(`test_course.py`)만 통과,
-   Isaac Lab 에서는 아직 한 번도 안 돌렸다.** 자세한 것은 그 폴더 README
+   Isaac Lab 에서는 아직 한 번도 안 돌렸다.** 사용법은 `docs/obstacle_rl_manual.md`
 
 과제 코드는 `tasks/sensor_fusion/` 에 있습니다. 로봇 에셋(URDF/USD/메시)은
 `.gitignore` 대상이라 `00_fetch_description.sh` 로 받아옵니다.
