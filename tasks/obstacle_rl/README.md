@@ -1,15 +1,13 @@
 # 장애물 넘기 강화학습 (`tasks/obstacle_rl/`)
 
 RosPider 가 실물 장애물 코스(방지턱 / 구덩이 / 굴러가는 파이프 / 그레이팅 계단 → 작업대)를
-넘도록 Isaac Lab 2.3.x + RSL-RL PPO 로 학습한다.
-
-**사용법, 지형과 보상 설명, 고칠 곳, 에러 대처는 [`docs/obstacle_rl_manual.md`](../../docs/obstacle_rl_manual.md)** 에 있다.
+넘도록 Isaac Lab 2.3.x + RSL-RL PPO 로 학습한다. `isaac-shell` 안, 레포 루트에서 실행한다.
 
 ```bash
-python tasks/sensor_fusion/02_urdf_to_usd.py --no-fix-base        # 1회
+python tasks/sensor_fusion/02_urdf_to_usd.py --no-fix-base        # 1회: 몸이 고정되지 않은 USD
 python tasks/obstacle_rl/test_course.py                           # 지형 검사 (Kit 불필요)
-python tasks/obstacle_rl/train.py --headless --num_envs 64        # 학습
-python tasks/obstacle_rl/play.py --checkpoint logs/rsl_rl/rospider_obstacle/<날짜>/model_3000.pt   # 실물 맵 평가
+python tasks/obstacle_rl/train.py --headless --num_envs 64        # 학습 (--height_curriculum 옵션)
+python tasks/obstacle_rl/play.py --checkpoint logs/rsl_rl/rospider_obstacle/<날짜>/model_3000.pt   # 실물 맵 1, 2 평가
 ```
 
 | 파일 | 내용 |
@@ -23,4 +21,5 @@ python tasks/obstacle_rl/play.py --checkpoint logs/rsl_rl/rospider_obstacle/<날
 | `train.py`, `play.py` | 학습, 평가 |
 | `test_course.py` | 지형 기하 검사 |
 
-**상태 (2026-11-01)**: 지형 검사만 통과. Isaac Lab 에서는 아직 한 번도 돌리지 않았다.
+**상태 (2026-11-01)**: 지형 검사(`test_course.py`)만 통과. Isaac Lab 에서는 아직 돌리지 않았다.
+보상 가중치, 다리 PD 게인, ㄴ자 용접판 크기는 맞춰 보지 않은 출발값이다.
