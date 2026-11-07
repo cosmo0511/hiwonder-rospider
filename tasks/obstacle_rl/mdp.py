@@ -44,6 +44,11 @@ def _env_kinds(env: "ManagerBasedRLEnv", env_ids: torch.Tensor) -> list[str]:
     return [_KIND_CACHE[key][int(c)] for c in cols]
 
 
+def _pipe_centers(kind: str) -> list[float] | None:
+    """2단계 타일(arc_bump / box_pit)은 course.SEQUENCES 에 없고 파이프도 없다."""
+    return course.pipe_centers(kind) if kind in course.SEQUENCES else None
+
+
 def reset_pipes(
     env: "ManagerBasedRLEnv",
     env_ids: torch.Tensor,
@@ -61,9 +66,9 @@ def reset_pipes(
         obj: RigidObject = env.scene[name]
         dx = torch.empty(n, device=env.device)
         for e, k in enumerate(kinds):
-            centers = course.pipe_centers(k)
+            centers = _pipe_centers(k)
             dx[e] = centers[i] if centers is not None else course.PIPE_PARK[i]
-        has = torch.tensor([course.pipe_centers(k) is not None for k in kinds], device=env.device)
+        has = torch.tensor([_pipe_centers(k) is not None for k in kinds], device=env.device)
         dx = dx + torch.where(has, (torch.rand(n, device=env.device) * 2 - 1) * jitter_x, torch.zeros_like(dx))
         pos = origins.clone()
         pos[:, 0] += dx
@@ -360,3 +365,128 @@ def park_pipes(env: "ManagerBasedRLEnv", env_ids: torch.Tensor, pipe_names: tupl
         quat[:, 0] = 1.0
         obj.write_root_pose_to_sim(torch.cat([pos, quat], dim=-1), env_ids=env_ids)
         obj.write_root_velocity_to_sim(torch.zeros(n, 6, device=env.device), env_ids=env_ids)
+
+
+# ---------------------------------------------------------------- 3단계: 목표 지점 기반 커리큘럼 / 종료
+def _goal_dist(kind: str) -> float:
+    """타일 종류별 목표: 출발점에서 몇 m 앞까지 가면 성공인가.
+    계단이 있으면 작업대 위 0.25 m, 장애물만 있으면 마지막 장애물 끝 + 0.35 m (obstacle_sweep 판정), 평지는 2 m.
+    2단계 타일(arc_bump / box_pit)은 장애물 중심 0.70 + 최대 폭 0.35 + 0.35 = 1.40 m."""
+    if kind not in course.SEQUENCES:
+        return 1.40
+    lay = course.layout(kind)
+    ox = course.origin(kind)[0]
+    if "plat" in lay:
+        return lay["plat"] + 0.25 - ox
+    if lay:
+        return max(x + course.LENGTH[k] for k, x in lay.items()) + 0.35 - ox
+    return 2.0
+
+
+def _goals(env: "ManagerBasedRLEnv") -> torch.Tensor:
+    key = ("goal", id(env))
+    if key not in _KIND_CACHE:
+        kinds = _env_kinds(env, torch.arange(env.num_envs, device=env.device))
+        _KIND_CACHE[key] = torch.tensor([_goal_dist(k) for k in kinds], device=env.device)
+    return _KIND_CACHE[key]
+
+
+def reached_goal(env: "ManagerBasedRLEnv", asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+    """종료(성공): 목표 지점을 지났다. 작업대 끝에서 떨어지지 않게 거기서 끝낸다."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    return (asset.data.root_pos_w[:, 0] - env.scene.env_origins[:, 0]) >= _goals(env)
+
+
+def course_curriculum(env: "ManagerBasedRLEnv", env_ids, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+    """목표에 도착하면 한 단계 위(더 높은 장애물), 목표의 절반도 못 가면 한 단계 아래."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    terrain = env.scene.terrain
+    progress = asset.data.root_pos_w[env_ids, 0] - env.scene.env_origins[env_ids, 0]
+    goal = _goals(env)[env_ids]
+    up = progress >= goal
+    down = (progress < 0.5 * goal) & ~up
+    terrain.update_env_origins(env_ids, up, down)
+    return torch.mean(terrain.terrain_levels.float())
+
+
+# ---------------------------------------------------------------- 3-c: 지형을 보는 정책 (손목 뎁스 카메라로 만든 높이 지도 흉내)
+from isaaclab.managers import ManagerTermBase  # noqa: E402
+
+
+def _scan_heights(env: "ManagerBasedRLEnv", sensor_name: str, pipes: bool) -> torch.Tensor:
+    """레이 히트 높이 - 몸통 루트 높이 (m). 파이프는 RayCaster 에 안 잡혀서(정적 메시만) 원통 윗면을 직접 계산해 합친다."""
+    sensor = env.scene.sensors[sensor_name]
+    hits = sensor.data.ray_hits_w                      # (N, R, 3)
+    z = hits[..., 2].clone()
+    z = torch.where(torch.isfinite(z), z, torch.full_like(z, -1.0))
+    if pipes:
+        r = course.PIPE_D / 2
+        for name in ("pipe_0", "pipe_1"):
+            if name not in env.scene.keys():
+                continue
+            p = env.scene[name].data.root_pos_w        # (N, 3), 축은 y
+            dx = hits[..., 0] - p[:, :1]
+            dy = hits[..., 1] - p[:, 1:2]
+            inside = (dx.abs() < r) & (dy.abs() < course.PIPE_LEN / 2)
+            top = p[:, 2:3] + torch.sqrt((r * r - dx * dx).clamp(min=0.0))
+            z = torch.where(inside, torch.maximum(z, top), z)
+    root_z = env.scene["robot"].data.root_pos_w[:, 2:3]
+    return (z - root_z).clamp(-0.3, 0.3)
+
+
+class PerceptiveScan(ManagerTermBase):
+    """관측: 몸 앞 높이 지도 + 실물처럼 잡음. 에피소드마다 높이 치우침 ±2 cm, 매 스텝 1 cm 잡음 (앞 0.5 m 넘으면 2 배),
+    칸 10 % 는 직전 값 유지, 1 ~ 2 스텝 늦게 들어옴. noise=False 면 깨끗한 값 (critic 용)."""
+
+    def __init__(self, cfg, env):
+        super().__init__(cfg, env)
+        p = cfg.params
+        self.sensor_name = p["sensor_name"]
+        self.noise = p.get("noise", True)
+        self.scale = p.get("noise_scale", 1.0)
+        sensor = env.scene.sensors[self.sensor_name]
+        n_rays = sensor.num_rays if hasattr(sensor, "num_rays") else sensor.ray_starts.shape[1]
+        local_x = sensor.ray_starts[0, :, 0]          # 오프셋 포함된 몸 기준 x
+        self.far = (local_x > 0.5).float().unsqueeze(0)
+        n = env.num_envs
+        self.bias = torch.zeros(n, 1, device=env.device)
+        self.delay = torch.ones(n, dtype=torch.long, device=env.device)
+        self.buf = torch.zeros(3, n, n_rays, device=env.device)
+        self.last = torch.zeros(n, n_rays, device=env.device)
+        self.fresh = torch.ones(n, dtype=torch.bool, device=env.device)
+
+    def reset(self, env_ids=None):
+        if env_ids is None:
+            env_ids = slice(None)
+        self.bias[env_ids] = (torch.rand_like(self.bias[env_ids]) * 2 - 1) * 0.02 * self.scale
+        self.delay[env_ids] = torch.randint(1, 3, self.delay[env_ids].shape, device=self.delay.device)
+        self.fresh[env_ids] = True
+
+    def __call__(self, env, sensor_name: str, noise: bool = True, noise_scale: float = 1.0, pipes: bool = True):
+        h = _scan_heights(env, sensor_name, pipes)
+        if not noise:
+            return h
+        h = h + self.bias + torch.randn_like(h) * 0.01 * self.scale * (1.0 + self.far)
+        keep = torch.rand_like(h) < 0.10
+        h = torch.where(keep & ~self.fresh.unsqueeze(-1), self.last, h)
+        self.last = h
+        # 지연: 버퍼를 밀고 env 마다 1 ~ 2 스텝 전 값을 꺼낸다 (리셋 직후에는 현재 값으로 채움)
+        self.buf = torch.roll(self.buf, 1, dims=0)
+        self.buf[0] = h
+        self.buf[:, self.fresh] = h[self.fresh].unsqueeze(0)
+        self.fresh[:] = False
+        idx = self.delay.view(1, -1, 1).expand(1, -1, h.shape[1])
+        return torch.gather(self.buf, 0, idx).squeeze(0).clamp(-0.3, 0.3)
+
+
+def pipe_states(env: "ManagerBasedRLEnv") -> torch.Tensor:
+    """critic 특권 관측: 파이프 2 개의 몸 기준 (x, z, vx). 파이프가 없으면 0."""
+    out = []
+    root = env.scene["robot"].data.root_pos_w
+    for name in ("pipe_0", "pipe_1"):
+        if name in env.scene.keys():
+            d = env.scene[name].data
+            out += [d.root_pos_w[:, 0] - root[:, 0], d.root_pos_w[:, 2] - root[:, 2], d.root_lin_vel_w[:, 0]]
+        else:
+            out += [torch.zeros(env.num_envs, device=env.device)] * 3
+    return torch.stack(out, dim=-1).clamp(-3.0, 3.0)

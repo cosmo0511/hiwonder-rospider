@@ -11,6 +11,7 @@ import copy
 import isaaclab_tasks.manager_based.locomotion.velocity.mdp as loco_mdp
 from isaaclab.managers import CurriculumTermCfg as CurrTerm
 from isaaclab.managers import EventTermCfg as EventTerm
+from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
 
@@ -144,6 +145,83 @@ def _exp3a(env, agent):
     _stage2(env)
 
 
+def _exp3b(env, agent):
+    """3-b (3단계 블라인드 시도): 3-a 정책을 이어 받아 팀 코스 지형 전체(방지턱, 구덩이, 굴러가는 파이프, 그레이팅 계단 +
+    작업대, 맵 1 / 2) 에서 학습. 높이는 0.5 배부터 실물까지 커리큘럼. 블라인드로 안 되면 teacher-student 로 간다.
+    실행: run_exp.sh 3b <iters> 0.18 <3-a 체크포인트>"""
+    from isaaclab.managers import EventTermCfg as EventTerm  # noqa: PLC0415
+
+    from .terrain_cfg import OBSTACLE_TERRAINS_CFG, enable_height_curriculum  # noqa: PLC0415
+
+    _exp2g(env, agent)
+    _stage2(env)
+    from .stage2_terrain import Stage2TileCfg  # noqa: PLC0415
+
+    gen = copy.deepcopy(OBSTACLE_TERRAINS_CFG)
+    enable_height_curriculum(gen, low=0.5)
+    # 3-a 에서 배운 원호 방지턱 / 상자 구덩이(폭 무작위, 10 / 7 cm)를 잊지 않게 조금 남긴다 (검토 AI 5차)
+    for k, p in {"flat": 0.04, "bump": 0.12, "pit": 0.12, "stairs": 0.16, "map1": 0.15, "map2": 0.15}.items():
+        gen.sub_terrains[k].proportion = p
+    gen.sub_terrains["arc_bump"] = Stage2TileCfg(kind="arc_bump", proportion=0.08)
+    gen.sub_terrains["box_pit"] = Stage2TileCfg(kind="box_pit", proportion=0.08)
+    gen.num_cols = 18
+    env.scene.terrain.terrain_generator = gen
+    env.scene.terrain.max_init_terrain_level = 1
+    env.events.reset_pipes = EventTerm(func=mdp.reset_pipes, mode="reset", params={"jitter_x": 0.03})
+    env.episode_length_s = 30.0          # 계단 / 작업대까지 2.4 ~ 2.8 m, 계단에서 느려짐
+    # 기본 커리큘럼(2 m 이상 걸었나)은 맵에서 작업대 도착(1.85 m)을 실패로 본다 -> 목표 지점 기준으로
+    env.curriculum.terrain_levels = CurrTerm(func=mdp.course_curriculum)
+    env.terminations.reached_goal = DoneTerm(func=mdp.reached_goal, time_out=True)   # 작업대 끝에서 떨어지지 않게
+
+
+def _add_perception(env, agent, noise_scale: float = 1.0):
+    """정책에 몸 앞 높이 지도 (x -0.15 ~ 0.75 m, y ±0.25 m, 5 cm 간격 = 19 x 11 = 209 칸) 를 보여준다.
+    실물에서는 손목 뎁스 카메라(12 fps) + 다리 odometry 로 같은 격자를 만든다는 가정. 잡음 / 지연 / 칸 누락 포함.
+    critic 에는 깨끗한 지도 + 파이프 위치 · 속도 (특권)."""
+    from isaaclab.managers import ObservationGroupCfg as ObsGroup  # noqa: PLC0415
+    from isaaclab.sensors import RayCasterCfg, patterns  # noqa: PLC0415
+    from isaaclab.utils import configclass  # noqa: PLC0415
+
+    env.scene.actor_scanner = RayCasterCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/base_footprint",
+        offset=RayCasterCfg.OffsetCfg(pos=(0.30, 0.0, 20.0)),
+        ray_alignment="yaw",
+        pattern_cfg=patterns.GridPatternCfg(resolution=0.05, size=(0.90, 0.50)),
+        mesh_prim_paths=["/World/ground"],
+        update_period=1.0 / 12.0,
+        drift_range=(-0.03, 0.03),
+    )
+
+    @configclass
+    class PerceptionCfg(ObsGroup):
+        scan = ObsTerm(func=mdp.PerceptiveScan, params={"sensor_name": "actor_scanner", "noise": True,
+                                                        "noise_scale": noise_scale})
+
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = True
+
+    @configclass
+    class PrivCfg(ObsGroup):
+        scan = ObsTerm(func=mdp.PerceptiveScan, params={"sensor_name": "actor_scanner", "noise": False})
+        pipes = ObsTerm(func=mdp.pipe_states)
+
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = True
+
+    env.observations.perception = PerceptionCfg()
+    env.observations.priv = PrivCfg()
+    agent.obs_groups = {"policy": ["policy", "perception"], "critic": ["critic", "priv"]}
+
+
+def _exp3c(env, agent):
+    """3-c (3단계, 지형을 보는 정책): 3-b 와 같은 코스 지형 + 정책이 몸 앞 높이 지도(잡음 포함)를 봄.
+    3-b 가중치에 새 입력 칸을 0 으로 붙여 이어 받는다 (expand_ckpt.py). 실행: run_exp.sh 3c <iters> 0.18 <확장한 체크포인트>"""
+    _exp3b(env, agent)
+    _add_perception(env, agent)
+
+
 EXPERIMENTS = {
     "1": _exp1,
     "2b": _exp2b,
@@ -154,6 +232,8 @@ EXPERIMENTS = {
     "2f": _exp2f,
     "2g": _exp2g,
     "3a": _exp3a,
+    "3b": _exp3b,
+    "3c": _exp3c,
 }
 
 

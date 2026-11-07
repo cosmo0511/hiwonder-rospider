@@ -103,7 +103,9 @@ def main() -> None:
     runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=str(log_dir), device=agent_cfg.device)
     if args.resume:
         print(f"[train] 이어서: {args.resume}")
-        runner.load(args.resume)
+        # expand_ckpt.py 로 입력을 늘린 체크포인트는 옵티마이저 상태가 없다 -> 새로 시작
+        has_opt = "optimizer_state_dict" in torch.load(args.resume, map_location="cpu", weights_only=False)
+        runner.load(args.resume, load_optimizer=has_opt)
     runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
     env.close()
 
