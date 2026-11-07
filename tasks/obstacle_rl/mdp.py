@@ -17,10 +17,12 @@
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
 import torch
 
+import isaaclab.utils.math as math_utils
 from isaaclab.assets import Articulation, RigidObject
 from isaaclab.managers import SceneEntityCfg
 
@@ -93,3 +95,114 @@ def reached_platform(env: "ManagerBasedRLEnv", asset_cfg: SceneEntityCfg = Scene
     asset: Articulation = env.scene[asset_cfg.name]
     z = asset.data.root_pos_w[:, 2] - env.scene.env_origins[:, 2]
     return z > course.STAIR_N * course.STAIR_RISE - 0.03
+
+
+# ---------------------------------------------------------------- tripod 걸음 학습용 (env_cfg.use_tripod_gait)
+# 기준 걸음은 rospider_wasd.py 의 leg_targets() (실제로 걷는 걸 확인한 열린 루프 tripod).
+# 박자 phase = (t * GAIT_HZ) % 1. 그룹 A(LF, RM, LR)는 phase < 0.5 에서 스윙, B 는 반 박자 뒤.
+
+GAIT_HZ = 1.2
+COXA_AMP, FEMUR_LIFT, TIBIA_LIFT = 0.35, 0.6, 0.3
+BASE_SPEED = 0.18        # wasd 걸음(vx=1)이 평지에서 내는 속도 (gait_eval 측정 0.183 m/s)
+LEGS = ("LF", "LM", "LR", "RF", "RM", "RR")
+TRIPOD_A = ("LF", "RM", "LR")
+SIDE_SIGN = {"L": -1.0, "R": 1.0}
+# 발끝 = tibla_* 프레임 기준 end_*_joint 원점 (URDF). 발끝은 지름 18 mm 구.
+FOOT_TIP = {
+    "LF": (0.11519, -0.0097341, 0.001174),
+    "LM": (0.11519, -0.0097478, -0.0020999),
+    "LR": (0.11519, -0.0097478, -0.00039987),
+    "RF": (0.11519, 0.009749, 0.0010888),
+    "RM": (0.1107, 0.011377, 0.016938),
+    "RR": (0.11519, 0.009749, 0.00093881),
+}
+_GAIT_CACHE: dict = {}
+
+
+def _gait_ids(env: "ManagerBasedRLEnv") -> dict:
+    """다리 순서(LEGS)대로 관절 / 바디 / 접촉 센서 인덱스. 처음 한 번만 찾는다."""
+    if id(env) not in _GAIT_CACHE:
+        robot: Articulation = env.scene["robot"]
+        sensor = env.scene["contact_forces"]
+        joints = [f"{k}_{leg}_joint" for leg in LEGS for k in ("coxa", "femur", "tibla")]
+        _GAIT_CACHE[id(env)] = {
+            "joint": robot.find_joints(joints, preserve_order=True)[0],
+            "body": [robot.find_bodies(f"tibla_{leg}")[0][0] for leg in LEGS],
+            "sensor": [sensor.find_bodies(f"tibla_{leg}")[0][0] for leg in LEGS],
+            "tip": torch.tensor([FOOT_TIP[leg] for leg in LEGS], device=env.device),
+            "group_a": torch.tensor([leg in TRIPOD_A for leg in LEGS], device=env.device),
+        }
+    return _GAIT_CACHE[id(env)]
+
+
+def _phase(env: "ManagerBasedRLEnv") -> torch.Tensor:
+    return (env.episode_length_buf.float() * env.step_dt * GAIT_HZ) % 1.0
+
+
+def _stance_wanted(env: "ManagerBasedRLEnv") -> torch.Tensor:
+    """(env, 6) 이 박자에 땅에 있어야 하는 발."""
+    a_swing = (_phase(env) < 0.5).unsqueeze(-1)
+    return torch.where(_gait_ids(env)["group_a"], ~a_swing, a_swing)
+
+
+def _feet(env: "ManagerBasedRLEnv"):
+    """발끝 높이 z, 발끝 수평 속도 |v_xy|, 접촉 여부. 모두 (env, 6)."""
+    ids = _gait_ids(env)
+    robot: Articulation = env.scene["robot"]
+    n = env.num_envs
+    q = robot.data.body_quat_w[:, ids["body"]].reshape(-1, 4)
+    off = math_utils.quat_apply(q, ids["tip"].repeat(n, 1)).reshape(n, 6, 3)
+    pos = robot.data.body_pos_w[:, ids["body"]] + off
+    vel = robot.data.body_lin_vel_w[:, ids["body"]] + torch.cross(robot.data.body_ang_vel_w[:, ids["body"]], off, dim=-1)
+    contact = env.scene["contact_forces"].data.net_forces_w[:, ids["sensor"]].norm(dim=-1) > 1.0
+    return pos[..., 2], vel[..., :2].norm(dim=-1), contact
+
+
+def gait_clock(env: "ManagerBasedRLEnv") -> torch.Tensor:
+    """관측: 걸음 박자 sin, cos. 실기에서는 제어기 내부 시계로 같은 값을 만든다."""
+    ph = 2 * math.pi * _phase(env)
+    return torch.stack([torch.sin(ph), torch.cos(ph)], dim=-1)
+
+
+def reference_joints(env: "ManagerBasedRLEnv", command_name: str = "base_velocity") -> torch.Tensor:
+    """(env, 18) 기준 관절각 (rad). wasd leg_targets(phase, vx, 0) 에서 앞뒤 스윙 폭만 명령 속도에 비례."""
+    vx = env.command_manager.get_command(command_name)[:, 0]
+    amp = torch.clamp(vx / BASE_SPEED, 0.0, 1.0)
+    ph = _phase(env)
+    out = []
+    for leg in LEGS:
+        p = (ph + (0.0 if leg in TRIPOD_A else 0.5)) % 1.0
+        swing = p < 0.5
+        u = torch.where(swing, p / 0.5, (p - 0.5) / 0.5)
+        frac = torch.where(swing, -torch.cos(math.pi * u), torch.cos(math.pi * u))
+        lift = torch.where(swing, torch.sin(math.pi * u), torch.zeros_like(u))
+        out += [SIDE_SIGN[leg[0]] * COXA_AMP * amp * frac, FEMUR_LIFT * lift, TIBIA_LIFT * lift]
+    return torch.stack(out, dim=-1)
+
+
+def imitate_tripod(env: "ManagerBasedRLEnv", std: float = 0.15, command_name: str = "base_velocity") -> torch.Tensor:
+    """보상: 다리 관절이 기준 tripod 궤적을 따라가는 정도. exp(-평균 제곱오차 / std^2), 0 ~ 1."""
+    q = env.scene["robot"].data.joint_pos[:, _gait_ids(env)["joint"]]
+    err = (q - reference_joints(env, command_name)).pow(2).mean(dim=-1)
+    return torch.exp(-err / std**2)
+
+
+def tripod_contact(env: "ManagerBasedRLEnv") -> torch.Tensor:
+    """보상: 박자대로 닿고 / 떠 있는 발의 비율, 0 ~ 1."""
+    _, _, contact = _feet(env)
+    return (contact == _stance_wanted(env)).float().mean(dim=-1)
+
+
+def swing_clearance(env: "ManagerBasedRLEnv", target: float = 0.05) -> torch.Tensor:
+    """보상: 스윙 차례인 발끝이 디딘 발들보다 얼마나 높이 떴나 (target 에서 1 로 포화), 0 ~ 1.
+    기준을 땅이 아니라 가장 낮은 발끝으로 잡아서 장애물 지형에서도 그대로 쓴다."""
+    z, _, _ = _feet(env)
+    lift = (z - z.min(dim=-1, keepdim=True).values).clamp(0.0, target) / target
+    swing = ~_stance_wanted(env)
+    return (lift * swing).sum(dim=-1) / swing.sum(dim=-1).clamp(min=1)
+
+
+def foot_slip(env: "ManagerBasedRLEnv") -> torch.Tensor:
+    """벌점용: 땅에 닿은 발끝의 수평 속도 합 (m/s)."""
+    _, v, contact = _feet(env)
+    return (v * contact).sum(dim=-1)

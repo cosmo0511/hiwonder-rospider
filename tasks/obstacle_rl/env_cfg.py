@@ -26,10 +26,12 @@ Isaac Lab 기본 보행 과제(``LocomotionVelocityRoughEnvCfg``: ANYmal, Go2 �
 from __future__ import annotations
 
 import copy
+import math
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import RigidObjectCfg
 from isaaclab.managers import EventTermCfg as EventTerm
+from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
@@ -81,7 +83,6 @@ class RoSpiderObstacleEnvCfg(LocomotionVelocityRoughEnvCfg):
 
     def __post_init__(self):
         super().__post_init__()
-        legs = SceneEntityCfg("robot", joint_names=LEG_JOINTS)
 
         # ---------------- 씬
         self.scene.robot = make_robot_cfg()
@@ -98,8 +99,9 @@ class RoSpiderObstacleEnvCfg(LocomotionVelocityRoughEnvCfg):
         self.actions.joint_pos.scale = 0.25
 
         # ---------------- 관측: 관절은 다리만
-        self.observations.policy.joint_pos.params = {"asset_cfg": legs}
-        self.observations.policy.joint_vel.params = {"asset_cfg": legs}
+        # 항마다 따로 만든다. 한 객체를 공유하면 첫 항이 resolve 하며 joint_ids 를 채워 두 번째 항에서 불일치 에러가 난다.
+        self.observations.policy.joint_pos.params = {"asset_cfg": SceneEntityCfg("robot", joint_names=LEG_JOINTS)}
+        self.observations.policy.joint_vel.params = {"asset_cfg": SceneEntityCfg("robot", joint_names=LEG_JOINTS)}
 
         # ---------------- 명령: 앞으로만, 느리게 (gait.py 최대 0.12 m/s)
         cmd = self.commands.base_velocity
@@ -149,7 +151,7 @@ class RoSpiderObstacleEnvCfg(LocomotionVelocityRoughEnvCfg):
         rw.undesired_contacts.params["sensor_cfg"] = SceneEntityCfg("contact_forces", body_names="femur_.*")
         rw.flat_orientation_l2.weight = -0.2
         rw.dof_pos_limits.weight = -1.0
-        rw.dof_pos_limits.params["asset_cfg"] = legs
+        rw.dof_pos_limits.params["asset_cfg"] = SceneEntityCfg("robot", joint_names=LEG_JOINTS)
 
         # ---------------- 종료
         self.terminations.base_contact.params["sensor_cfg"] = SceneEntityCfg("contact_forces", body_names=BASE_BODY)
@@ -188,3 +190,57 @@ class RoSpiderObstacleEnvCfg_PLAY(RoSpiderObstacleEnvCfg):
         self.terminations.platform = DoneTerm(func=obs_mdp.reached_platform)
         self.scene.terrain.terrain_generator.curriculum = True
 
+
+
+# ---------------------------------------------------------------- 단계별 학습용 옵션 (train.py 플래그)
+# 기본 설정은 그대로 두고, 필요한 것만 덮어쓴다.
+
+def make_flat(cfg: RoSpiderObstacleEnvCfg) -> None:
+    """평지에서 보행만 먼저 배운다. 파이프는 출발 뒤쪽 주차 자리에 그대로 둔다."""
+    cfg.scene.terrain.terrain_type = "plane"
+    cfg.scene.terrain.terrain_generator = None
+    cfg.curriculum.terrain_levels = None
+    cfg.events.reset_pipes = None
+
+
+def make_blind(cfg: RoSpiderObstacleEnvCfg) -> None:
+    """정책(actor)은 실기에서 얻을 수 있는 값만 본다: IMU(각속도, 중력 방향), 명령, 다리 관절, 직전 행동.
+    몸 선속도와 높이 스캔은 critic 만 본다(학습 때만 쓰는 특권 관측). 에이전트 쪽은 obs_groups 를 맞춰야 한다.
+    """
+    critic = copy.deepcopy(cfg.observations.policy)
+    critic.enable_corruption = False
+    cfg.observations.critic = critic
+    cfg.observations.policy.base_lin_vel = None
+    cfg.observations.policy.height_scan = None
+
+
+def use_wasd_gains(cfg: RoSpiderObstacleEnvCfg) -> None:
+    """다리 게인을 rospider_wasd.py(실제로 걷는 걸 확인한 값)에 맞춘다.
+    그 스크립트는 degree 단위 드라이브: KP 1.0 /deg, KD 0.02 /(deg/s), 최대 토크 2.0 -> rad 단위로 바꾼다.
+    """
+    legs = cfg.scene.robot.actuators["legs"]
+    legs.stiffness = math.degrees(1.0)     # 57.3 N*m/rad
+    legs.damping = math.degrees(0.02)      # 1.146 N*m*s/rad
+    legs.effort_limit_sim = 2.0
+
+
+def use_tripod_gait(cfg: RoSpiderObstacleEnvCfg) -> None:
+    """1단계: wasd tripod 걸음을 배우게 한다. make_blind 보다 **먼저** 불러야 critic 에도 박자가 들어간다.
+
+    - 관측: 걸음 박자 sin/cos (1.2 Hz)
+    - 보상: 기준 tripod 궤적 모방, 박자대로 접촉, 스윙 발 높이, 디딘 발 미끄러짐 벌점, 방향 유지 강화
+    - 명령: 전진 0.08 ~ 0.20 m/s (wasd 걸음이 0.18 m/s). 항상 걷는다(서 있는 env 없음)
+    - 행동 크기 0.25 -> 0.5 (wasd 는 허벅지를 0.6 rad 까지 든다)
+    """
+    cfg.observations.policy.gait_clock = ObsTerm(func=obs_mdp.gait_clock)
+    cfg.actions.joint_pos.scale = 0.5
+    cmd = cfg.commands.base_velocity
+    cmd.ranges.lin_vel_x = (0.08, 0.20)
+    cmd.rel_standing_envs = 0.0
+    rw = cfg.rewards
+    rw.imitate_tripod = RewTerm(func=obs_mdp.imitate_tripod, weight=2.0, params={"std": 0.15})
+    rw.tripod_contact = RewTerm(func=obs_mdp.tripod_contact, weight=1.0)
+    rw.swing_clearance = RewTerm(func=obs_mdp.swing_clearance, weight=0.5, params={"target": 0.05})
+    rw.foot_slip = RewTerm(func=obs_mdp.foot_slip, weight=-0.5)
+    rw.track_ang_vel_z_exp.weight = 1.0
+    rw.track_ang_vel_z_exp.params["std"] = 0.15
