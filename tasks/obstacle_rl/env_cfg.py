@@ -238,9 +238,19 @@ def use_tripod_gait(cfg: RoSpiderObstacleEnvCfg) -> None:
     cmd.ranges.lin_vel_x = (0.08, 0.20)
     cmd.rel_standing_envs = 0.0
     rw = cfg.rewards
-    rw.imitate_tripod = RewTerm(func=obs_mdp.imitate_tripod, weight=2.0, params={"std": 0.15})
+    # 허용 폭 0.5 rad: 베이스라인 tripod 가 기준과 RMS 0.10 rad (점수 0.96). 0.15 로 했더니 정책 오차 0.89 rad 에서 점수가 0 에 붙어 안 배웠음
+    rw.imitate_tripod = RewTerm(func=obs_mdp.imitate_tripod, weight=2.0, params={"std": 0.5})
+    rw.tripod_pose_error = RewTerm(func=obs_mdp.tripod_pose_error, weight=-1.0)
     rw.tripod_contact = RewTerm(func=obs_mdp.tripod_contact, weight=1.0)
     rw.swing_clearance = RewTerm(func=obs_mdp.swing_clearance, weight=0.5, params={"target": 0.05})
     rw.foot_slip = RewTerm(func=obs_mdp.foot_slip, weight=-0.5)
     rw.track_ang_vel_z_exp.weight = 1.0
     rw.track_ang_vel_z_exp.params["std"] = 0.15
+
+
+def use_real_masses(cfg: RoSpiderObstacleEnvCfg, scale_range: tuple[float, float] = (0.9, 1.1)) -> None:
+    """무게 분포를 팀 실측(총 3.253 kg)에 맞춘다. 기존 '몸통에 +0.8~1.8 kg' 이벤트는 끈다.
+    학습: 부위마다 ±10 % 무작위. 평가는 scale_range=(1, 1)."""
+    cfg.events.add_base_mass = None
+    cfg.events.real_masses = EventTerm(func=obs_mdp.set_real_masses, mode="startup",
+                                       params={"scale_range": scale_range})

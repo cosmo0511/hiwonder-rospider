@@ -29,13 +29,15 @@ from pathlib import Path
 from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description="RosPider 걸음새 평가")
-parser.add_argument("--controller", choices=["policy", "tripod"], required=True)
+parser.add_argument("--controller", choices=["policy", "tripod", "zero"], required=True,
+                    help="zero = 행동 0 (CPG 행동 --exp 2f 의 열린 루프 확인용)")
 parser.add_argument("--checkpoint", default=None, help="--controller policy 일 때 model_XXXX.pt")
 parser.add_argument("--seconds", type=float, default=15.0)
 parser.add_argument("--vx", type=float, default=0.1, help="정책 전진 명령 (m/s)")
 parser.add_argument("--num_envs", type=int, default=8)
 parser.add_argument("--friction", type=float, default=0.8)
 parser.add_argument("--flat", action="store_true")
+parser.add_argument("--exp", default=None, help="experiments.py 실험 이름. 주면 --gait/--blind/--wasd_gains 는 무시")
 parser.add_argument("--gait", action="store_true")
 parser.add_argument("--blind", action="store_true")
 parser.add_argument("--wasd_gains", action="store_true")
@@ -62,7 +64,10 @@ from isaaclab.utils.math import quat_apply  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tasks"))
+from obstacle_rl import experiments  # noqa: E402
+from obstacle_rl import mdp as gait_mdp  # noqa: E402
 from obstacle_rl.agents.rsl_rl_ppo_cfg import RoSpiderObstaclePPORunnerCfg  # noqa: E402
+from obstacle_rl.baseline import TripodBaseline  # noqa: E402
 from obstacle_rl.env_cfg import RoSpiderObstacleEnvCfg, make_blind, make_flat, use_tripod_gait, use_wasd_gains  # noqa: E402
 
 LEGS = ["LF", "LM", "LR", "RF", "RM", "RR"]
@@ -80,48 +85,6 @@ FOOT_TIP = {
 FOOT_R = 0.009
 CONTACT_N = 1.0   # 이 힘(N)보다 크면 닿음
 
-# ---- 기존 tripod 걸음. rospider_wasd.py 의 leg_targets() 를 그대로 옮김 (값을 바꾸지 말 것)
-GAIT_HZ, COXA_AMP, FEMUR_LIFT, TIBIA_LIFT, SMOOTH_60HZ = 1.2, 0.35, 0.6, 0.3, 0.25
-SIDE_SIGN = {"L": -1.0, "R": 1.0}
-
-
-class TripodBaseline:
-    """rospider_wasd.py 와 같은 열린 루프 tripod 걸음. 관절 목표를 절대각(rad)으로 만들어 행동으로 바꾼다."""
-
-    def __init__(self, env: ManagerBasedRLEnv):
-        term = env.action_manager.get_term("joint_pos")
-        self.names = list(term._joint_names)
-        self.offset = term._offset if torch.is_tensor(term._offset) else torch.tensor(term._offset, device=env.device)
-        self.scale = term._scale if torch.is_tensor(term._scale) else torch.tensor(term._scale, device=env.device)
-        self.dt = env.step_dt
-        # wasd 는 60 Hz 에서 프레임마다 SMOOTH 만큼 따라간다 -> 이 env 의 제어 주기로 환산
-        self.alpha = 1.0 - (1.0 - SMOOTH_60HZ) ** (60.0 * self.dt)
-        self.phase = torch.zeros(env.num_envs, device=env.device)
-        self.q = torch.zeros(env.num_envs, len(self.names), device=env.device)   # wasd 처럼 0 에서 시작
-
-    def act(self, vx: float = 1.0, wz: float = 0.0) -> torch.Tensor:
-        if abs(vx) + abs(wz) > 0:
-            self.phase = (self.phase + GAIT_HZ * self.dt) % 1.0
-        act = min(1.0, abs(vx) + abs(wz))
-        des = torch.zeros_like(self.q)
-        for j, name in enumerate(self.names):
-            kind, leg = name.split("_")[0], name.split("_")[1]
-            p = (self.phase + (0.0 if leg in TRIPOD_A else 0.5)) % 1.0
-            swing = p < 0.5
-            u = torch.where(swing, p / 0.5, (p - 0.5) / 0.5)
-            frac = torch.where(swing, -torch.cos(math.pi * u), torch.cos(math.pi * u))
-            lift = torch.where(swing, torch.sin(math.pi * u), torch.zeros_like(u))
-            amp = max(-1.0, min(1.0, (vx - wz) if leg[0] == "L" else (vx + wz)))
-            if kind == "coxa":
-                des[:, j] = SIDE_SIGN[leg[0]] * COXA_AMP * amp * frac
-            elif kind == "femur":
-                des[:, j] = FEMUR_LIFT * act * lift
-            else:
-                des[:, j] = TIBIA_LIFT * act * lift
-        self.q += self.alpha * (des - self.q)
-        return (self.q - self.offset) / self.scale
-
-
 def runs(mask: np.ndarray) -> list[tuple[int, int]]:
     """불리언 1차원 배열에서 True 구간 [시작, 끝) 목록."""
     d = np.diff(np.concatenate([[0], mask.astype(np.int8), [0]]))
@@ -130,18 +93,25 @@ def runs(mask: np.ndarray) -> list[tuple[int, int]]:
 
 def main() -> None:
     name = args.name or (
-        "tripod_baseline" if args.controller == "tripod"
+        f"zero_exp{args.exp}" if args.controller == "zero"
+        else "tripod_baseline" if args.controller == "tripod"
         else f"{Path(args.checkpoint).resolve().parent.name}_{Path(args.checkpoint).stem}")
     out = REPO / "outputs" / "obstacle_rl" / "gait_eval" / name
     out.mkdir(parents=True, exist_ok=True)
 
     env_cfg = RoSpiderObstacleEnvCfg()
     env_cfg.scene.num_envs = args.num_envs
-    make_flat(env_cfg)
-    if args.gait:
-        use_tripod_gait(env_cfg)
-    if args.blind:
-        make_blind(env_cfg)
+    agent_cfg = RoSpiderObstaclePPORunnerCfg()
+    if args.exp:
+        experiments.apply(args.exp, env_cfg, agent_cfg)
+        make_flat(env_cfg)   # 걸음새는 항상 평지에서 잰다 (장애물 실험도)
+    else:
+        make_flat(env_cfg)
+        if args.gait:
+            use_tripod_gait(env_cfg)
+        if args.blind:
+            make_blind(env_cfg)
+            agent_cfg.obs_groups = {"policy": ["policy"], "critic": ["critic"]}
     if args.wasd_gains or args.controller == "tripod":
         use_wasd_gains(env_cfg)
     cmd = env_cfg.commands.base_velocity
@@ -157,7 +127,10 @@ def main() -> None:
     ev.base_external_force_torque = None
     ev.physics_material.params["static_friction_range"] = (args.friction, args.friction)
     ev.physics_material.params["dynamic_friction_range"] = (args.friction, args.friction)
-    ev.add_base_mass.params["mass_distribution_params"] = (1.54, 1.54)   # 3.2 - 1.66
+    if ev.add_base_mass is not None:
+        ev.add_base_mass.params["mass_distribution_params"] = (1.54, 1.54)   # 3.2 - 1.66
+    if getattr(ev, "real_masses", None) is not None:
+        ev.real_masses.params["scale_range"] = (1.0, 1.0)   # 실측 분포 그대로
     ev.reset_base.params["pose_range"] = {"x": (0.0, 0.0), "y": (0.0, 0.0), "yaw": (0.0, 0.0)}
     ev.reset_robot_joints.params["position_range"] = (1.0, 1.0)
     env_cfg.episode_length_s = args.seconds + 5.0
@@ -176,17 +149,14 @@ def main() -> None:
 
         from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper  # noqa: PLC0415
 
-        agent_cfg = RoSpiderObstaclePPORunnerCfg()
         agent_cfg.device = env_cfg.sim.device
-        if args.blind:
-            agent_cfg.obs_groups = {"policy": ["policy"], "critic": ["critic"]}
         wrapped = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
         runner = OnPolicyRunner(wrapped, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
         runner.load(args.checkpoint)
         policy = runner.get_inference_policy(device=env.device)
         pobs = wrapped.get_observations()
         pobs = pobs[0] if isinstance(pobs, tuple) else pobs
-    else:
+    elif args.controller == "tripod":
         tripod = TripodBaseline(env)
 
     robot = env.scene["robot"]
@@ -201,7 +171,12 @@ def main() -> None:
     tip_z = np.zeros((steps, n, 6), dtype=np.float32)
     tip_vxy = np.zeros((steps, n, 6), dtype=np.float32)
     tilt = np.zeros((steps, n), dtype=np.float32)
+    ref_mse = np.zeros((steps, n), dtype=np.float32)   # 기준 tripod 궤적과의 관절 오차 (평균 제곱, rad^2)
+    joint_ids = gait_mdp._gait_ids(env)["joint"]
     start = robot.data.root_pos_w.clone()
+    vy_body = np.zeros((steps, n), dtype=np.float32)
+    was_reset = np.zeros(n, dtype=bool)   # 평가 중 넘어지거나 리셋된 env (이동량이 틀어지므로 지표에서 뺌)
+    prev_len = env.episode_length_buf.clone()
     ground_z = env.scene.env_origins[:, 2].cpu().numpy()
     writer = None
     if args.video:
@@ -215,8 +190,10 @@ def main() -> None:
             if args.controller == "policy":
                 pobs, _, _, _ = wrapped.step(policy(pobs))
                 pobs = pobs[0] if isinstance(pobs, tuple) else pobs
-            else:
+            elif args.controller == "tripod":
                 env.step(tripod.act(vx=1.0, wz=0.0))
+            else:
+                env.step(torch.zeros(n, env.action_manager.total_action_dim, device=env.device))
         f = sensor.data.net_forces_w[:, cs_ids].norm(dim=-1)
         q = robot.data.body_quat_w[:, rb_ids].reshape(-1, 4)
         off_w = quat_apply(q, tip_off.reshape(-1, 3)).reshape(n, 6, 3)
@@ -226,6 +203,11 @@ def main() -> None:
         contact[t] = (f > CONTACT_N).cpu().numpy()
         tip_z[t] = (tip[..., 2] - FOOT_R).cpu().numpy() - ground_z[:, None]
         tip_vxy[t] = vel[..., :2].norm(dim=-1).cpu().numpy()
+        ref = gait_mdp.reference_joints(env)
+        ref_mse[t] = (robot.data.joint_pos[:, joint_ids] - ref).pow(2).mean(dim=-1).cpu().numpy()
+        vy_body[t] = robot.data.root_lin_vel_b[:, 1].cpu().numpy()
+        was_reset |= (env.episode_length_buf < prev_len).cpu().numpy()
+        prev_len = env.episode_length_buf.clone()
         tilt[t] = torch.rad2deg(torch.acos(torch.clamp(-g[:, 2], -1.0, 1.0))).cpu().numpy()
         if writer is not None and t % every == 0:
             writer.append_data(np.asarray(env.render()))
@@ -261,7 +243,10 @@ def main() -> None:
     rows = [
         ("전진 속도 (m/s)", d[:, 0] / args.seconds, 3),
         ("옆으로 샌 거리 |y| (m)", np.abs(d[:, 1]), 3),
+        ("  y 부호 포함 (+ 왼쪽)", d[:, 1], 3),
         ("방향 틀어짐 |yaw| (deg)", np.abs(yaw), 1),
+        ("  yaw 부호 포함 (+ 왼쪽)", yaw, 1),
+        ("몸 기준 옆 속도 평균 (cm/s)", vy_body.mean(0) * 100, 2),
         ("최대 기울기 (deg)", tilt.max(0), 1),
         ("tripod 일치율 (%)", tripod_rate * 100, 1),
         ("6발 모두 닿음 (%)", all_down * 100, 1),
@@ -269,11 +254,19 @@ def main() -> None:
         ("다리당 걸음 수 (Hz)", steps_hz, 2),
         ("들린 발 최대 높이 평균 (cm)", clear * 100, 2),
         ("닿은 발 미끄러짐 (cm/s)", slip * 100, 2),
+        ("기준 궤적 오차 RMS (rad)", np.sqrt(ref_mse.mean(0)), 3),
+        ("따라하기 점수 std 0.15 (0~1)", np.exp(-ref_mse / 0.15**2).mean(0), 3),
+        ("따라하기 점수 std 0.30 (0~1)", np.exp(-ref_mse / 0.30**2).mean(0), 3),
+        ("따라하기 점수 std 0.50 (0~1)", np.exp(-ref_mse / 0.50**2).mean(0), 3),
         ("[검산] 닿은 발끝 높이 (cm, 0 근처여야)", stance_z * 100, 2),
     ]
     head = [f"[{name}] controller={args.controller}  {args.seconds:.0f} s  env {n}개  마찰 {args.friction}  3.2 kg",
-            f"  명령: {'vx ' + str(args.vx) + ' m/s 직진' if args.controller == 'policy' else 'wasd W 키 (vx=1)'}"]
-    lines = head + [f"  {label:<24} {np.mean(v):+.{p}f}  (sd {np.std(v):.{p}f})" for label, v, p in rows]
+            f"  명령: {'wasd W 키 (vx=1)' if args.controller == 'tripod' else 'vx ' + str(args.vx) + ' m/s 직진' + (' (행동 0)' if args.controller == 'zero' else '')}"]
+    ok = ~was_reset
+    if not ok.any():
+        ok = np.ones(n, dtype=bool)
+    head.append(f"  리셋된 env: {int(was_reset.sum())}/{n} (지표에서 뺌)")
+    lines = head + [f"  {label:<24} {np.mean(v[ok]):+.{p}f}  (sd {np.std(v[ok]):.{p}f})" for label, v, p in rows]
     (out / "metrics.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
     print("\n".join(lines), flush=True)
 

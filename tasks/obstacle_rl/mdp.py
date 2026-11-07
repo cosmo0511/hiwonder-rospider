@@ -136,6 +136,9 @@ def _gait_ids(env: "ManagerBasedRLEnv") -> dict:
 
 
 def _phase(env: "ManagerBasedRLEnv") -> torch.Tensor:
+    """걸음 박자 0 ~ 1. CPG 행동(cpg_action.py)을 쓰면 그 박자(빠르기가 바뀜), 아니면 1.2 Hz 고정 시계."""
+    if hasattr(env, "_gait_phase"):
+        return env._gait_phase
     return (env.episode_length_buf.float() * env.step_dt * GAIT_HZ) % 1.0
 
 
@@ -206,3 +209,154 @@ def foot_slip(env: "ManagerBasedRLEnv") -> torch.Tensor:
     """벌점용: 땅에 닿은 발끝의 수평 속도 합 (m/s)."""
     _, v, contact = _feet(env)
     return (v * contact).sum(dim=-1)
+
+
+def tripod_pose_error(env: "ManagerBasedRLEnv", command_name: str = "base_velocity") -> torch.Tensor:
+    """벌점용: 기준 tripod 궤적과의 관절 평균 제곱오차 (rad^2). imitate_tripod(exp)는 멀리 떨어지면 0 에 붙어
+    방향을 못 알려 주므로, 멀어도 기울기가 남는 제곱 오차를 같이 쓴다."""
+    q = env.scene["robot"].data.joint_pos[:, _gait_ids(env)["joint"]]
+    return (q - reference_joints(env, command_name)).pow(2).mean(dim=-1)
+
+
+# ---------------------------------------------------------------- 실측 무게 분포 (env_cfg.use_real_masses)
+# 2026-11-07 팀 실측 (g): 몸통 1418, 배터리 254, 충전 단자 22, 부품 8, 다리 1개 201
+#   (coxa 14 + femur 27 + tibla+발끝 38 + 서보 59 x 2), 팔 전체 402, 저울 합계 3253.
+# 다리 서보 2개는 femur, tibla 마디에 하나씩 (URDF 메시로 확인: coxa 메시는 브래킷뿐, femur / tibla 메시에 서보 몸통).
+# coxa 서보는 몸통 쪽 leg_center 에 있어 몸통 측정에 포함. 부위 합 3310 g 을 저울 3253 g 에 맞춰 0.983 배.
+REAL_MASS_G = {
+    "body": 1673.0,
+    "coxa": 14.0,     # 다리 하나당
+    "femur": 86.3,
+    "tibla": 97.3,
+    "arm": 395.0,
+}
+ARM_BODY_RE = r"(link[1-5]|gripper_link|[rl]_.*link|camera_connect_link|depth_cam_link)"
+
+
+def _mass_groups(robot: Articulation) -> dict[str, list[int]]:
+    import re  # noqa: PLC0415
+
+    groups: dict[str, list[int]] = {k: [] for k in REAL_MASS_G}
+    for i, name in enumerate(robot.body_names):
+        if name.startswith(("coxa_", "femur_", "tibla_")):
+            groups[name.split("_")[0]].append(i)
+        elif re.fullmatch(ARM_BODY_RE, name):
+            groups["arm"].append(i)
+        else:
+            groups["body"].append(i)
+    return groups
+
+
+def set_real_masses(
+    env: "ManagerBasedRLEnv",
+    env_ids: torch.Tensor | None,
+    scale_range: tuple[float, float] = (1.0, 1.0),
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+):
+    """시작할 때 한 번: 부위(몸통, coxa, femur, tibla, 팔)별 총질량을 실측값에 맞춘다.
+    부위 안에서는 URDF 비율을 유지하고, 관성도 같은 배율로 늘린다. scale_range 로 부위마다 env 별 무작위 배율."""
+    robot: Articulation = env.scene[asset_cfg.name]
+    view = robot.root_physx_view
+    masses = view.get_masses().clone()          # (env, body), CPU
+    inertias = view.get_inertias().clone()      # (env, body, 9)
+    if env_ids is None:
+        env_ids = torch.arange(env.num_envs)
+    env_ids = env_ids.cpu()
+    groups = _mass_groups(robot)
+    for g, idx in groups.items():
+        if not idx:
+            continue
+        per_leg = g in ("coxa", "femur", "tibla")
+        target = REAL_MASS_G[g] / 1000.0 * (len(idx) if per_leg else 1)
+        cur = masses[env_ids][:, idx].sum(dim=-1, keepdim=True)
+        k = target / cur * torch.empty_like(cur).uniform_(*scale_range)
+        masses[env_ids[:, None], torch.tensor(idx)[None, :]] = masses[env_ids][:, idx] * k
+        inertias[env_ids[:, None], torch.tensor(idx)[None, :]] = inertias[env_ids][:, idx] * k.unsqueeze(-1)
+    view.set_masses(masses, env_ids)
+    view.set_inertias(inertias, env_ids)
+    if not getattr(env, "_real_mass_logged", False):
+        env._real_mass_logged = True
+        m0 = masses[env_ids[0]]
+        print("[real_mass] " + ", ".join(f"{g} {float(m0[idx].sum()) * 1000:.0f} g ({len(idx)} 바디)" for g, idx in groups.items()),
+              f"| 합계 {float(m0.sum()) * 1000:.0f} g", flush=True)
+        print(f"[real_mass] 팔 바디: {[robot.body_names[i] for i in groups['arm']]}", flush=True)
+
+
+# ---------------------------------------------------------------- 2-d 후보 (검토 AI 지적 반영)
+def track_vx_exp(env: "ManagerBasedRLEnv", std: float = 0.06, command_name: str = "base_velocity") -> torch.Tensor:
+    """보상: 전진 속도(vx)만 따로 추종. 기본 track_lin_vel_xy_exp 는 vx 오차가 크면 vy 기울기까지 0 이 된다."""
+    asset: Articulation = env.scene["robot"]
+    err = env.command_manager.get_command(command_name)[:, 0] - asset.data.root_lin_vel_b[:, 0]
+    return torch.exp(-err.square() / std**2)
+
+
+def lin_vel_y_l2(env: "ManagerBasedRLEnv", command_name: str = "base_velocity") -> torch.Tensor:
+    """벌점용: 몸 기준 옆 속도와 명령 옆 속도 차이의 제곱."""
+    asset: Articulation = env.scene["robot"]
+    return (env.command_manager.get_command(command_name)[:, 1] - asset.data.root_lin_vel_b[:, 1]).square()
+
+
+def stance_slip(env: "ManagerBasedRLEnv") -> torch.Tensor:
+    """벌점용: 디딜 차례인 발 중 닿아 있는 발의 미끄러짐 합 (m/s). foot_slip 과 달리 발을 띄워서 피할 수 없게
+    stance_air 와 같이 쓴다."""
+    _, v, contact = _feet(env)
+    return (v * contact * _stance_wanted(env)).sum(dim=-1)
+
+
+def stance_air(env: "ManagerBasedRLEnv") -> torch.Tensor:
+    """벌점용: 디딜 차례인데 떠 있는 발의 비율 (0 ~ 1). 두 번 톡톡 딛기, 튀어 다니기 방지."""
+    _, _, contact = _feet(env)
+    want = _stance_wanted(env)
+    return ((~contact) & want).float().sum(dim=-1) / want.float().sum(dim=-1).clamp(min=1)
+
+
+def imitate_tripod_stand(env: "ManagerBasedRLEnv", std: float = 0.5, command_name: str = "base_velocity") -> torch.Tensor:
+    """imitate_tripod 와 같지만 기준 = 선 자세 + wasd 움직임. RM 다리처럼 선 자세가 0 이 아닌 다리를 비대칭으로 끌지 않는다."""
+    robot: Articulation = env.scene["robot"]
+    ids = _gait_ids(env)["joint"]
+    ref = robot.data.default_joint_pos[:, ids] + reference_joints(env, command_name)
+    err = (robot.data.joint_pos[:, ids] - ref).pow(2).mean(dim=-1)
+    return torch.exp(-err / std**2)
+
+
+def tripod_pose_error_stand(env: "ManagerBasedRLEnv", command_name: str = "base_velocity") -> torch.Tensor:
+    robot: Articulation = env.scene["robot"]
+    ids = _gait_ids(env)["joint"]
+    ref = robot.data.default_joint_pos[:, ids] + reference_joints(env, command_name)
+    return (robot.data.joint_pos[:, ids] - ref).pow(2).mean(dim=-1)
+
+
+def track_vy_exp(env: "ManagerBasedRLEnv", std: float = 0.04, command_name: str = "base_velocity") -> torch.Tensor:
+    """보상: 옆 속도(vy) 추종을 vx 와 떼어서. 옆으로 새는 걸 vx 오차와 상관없이 잡는다."""
+    asset: Articulation = env.scene["robot"]
+    err = env.command_manager.get_command(command_name)[:, 1] - asset.data.root_lin_vel_b[:, 1]
+    return torch.exp(-err.square() / std**2)
+
+
+def heading_error(env: "ManagerBasedRLEnv", command_name: str = "base_velocity") -> torch.Tensor:
+    """관측: 목표 방향 - 몸 방향 (rad, -pi ~ pi). 실기에서는 IMU 요 각속도를 적분해 얻는다 (JetHexa 논문과 같음)."""
+    term = env.command_manager.get_term(command_name)
+    err = math_utils.wrap_to_pi(term.heading_target - env.scene["robot"].data.heading_w)
+    return err.unsqueeze(-1)
+
+
+def heading_error_l2(env: "ManagerBasedRLEnv", command_name: str = "base_velocity") -> torch.Tensor:
+    """벌점용: 방향 오차 제곱."""
+    return heading_error(env, command_name).squeeze(-1).square()
+
+
+def park_pipes(env: "ManagerBasedRLEnv", env_ids: torch.Tensor, pipe_names: tuple[str, str] = ("pipe_0", "pipe_1")):
+    """파이프를 로봇 뒤 주차 자리(course.PIPE_PARK)에 둔다. 파이프가 없는 지형(2단계, 평가)에서 reset_pipes 대신."""
+    if env_ids is None:
+        env_ids = torch.arange(env.num_envs, device=env.device)
+    origins = env.scene.env_origins[env_ids]
+    n = len(env_ids)
+    for i, name in enumerate(pipe_names):
+        obj: RigidObject = env.scene[name]
+        pos = origins.clone()
+        pos[:, 0] += course.PIPE_PARK[i]
+        pos[:, 2] += course.PIPE_D / 2 + 0.002
+        quat = torch.zeros(n, 4, device=env.device)
+        quat[:, 0] = 1.0
+        obj.write_root_pose_to_sim(torch.cat([pos, quat], dim=-1), env_ids=env_ids)
+        obj.write_root_velocity_to_sim(torch.zeros(n, 6, device=env.device), env_ids=env_ids)

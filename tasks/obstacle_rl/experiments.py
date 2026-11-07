@@ -1,0 +1,163 @@
+"""실험 설정 모음. 이름 하나로 환경 + 에이전트 설정을 정한다 (train.py / gait_eval.py 의 --exp).
+
+새 실험은 앞 실험을 불러 놓고 바뀐 것만 덮어쓴다. 무엇을 왜 바꿨는지는 REWARD_DESIGN.md 실험 기록에 적는다.
+**Kit 이 뜬 뒤에 import.**
+"""
+
+from __future__ import annotations
+
+import copy
+
+import isaaclab_tasks.manager_based.locomotion.velocity.mdp as loco_mdp
+from isaaclab.managers import CurriculumTermCfg as CurrTerm
+from isaaclab.managers import EventTermCfg as EventTerm
+from isaaclab.managers import ObservationTermCfg as ObsTerm
+from isaaclab.managers import RewardTermCfg as RewTerm
+
+from . import mdp
+from .cpg_action import TripodCPGActionCfg
+from .env_cfg import make_blind, make_flat, use_real_masses, use_tripod_gait, use_wasd_gains
+
+
+def _exp1(env, agent):
+    """실험 1: 평지, 이동 점수만."""
+    make_flat(env)
+    make_blind(env)
+    use_wasd_gains(env)
+    agent.obs_groups = {"policy": ["policy"], "critic": ["critic"]}
+
+
+def _exp2b(env, agent):
+    """실험 2-b: 박자 + 기존 tripod 걸음 따라 하기 (허용 0.5 rad, 관절 차이 벌점)."""
+    make_flat(env)
+    use_tripod_gait(env)   # make_blind 보다 먼저 (critic 에도 박자)
+    make_blind(env)
+    use_wasd_gains(env)
+    agent.obs_groups = {"policy": ["policy"], "critic": ["critic"]}
+
+
+def _exp2c(env, agent):
+    """실험 2-c: 2-b 에서 걸음 따라 하기는 길잡이로만 줄이고, 속도 / 방향 맞추기를 키운다.
+    2-b 결과: 걸음은 생겼지만 0.18 명령에 0.33 m/s, 옆으로 1.7 m 샘."""
+    _exp2b(env, agent)
+    rw = env.rewards
+    rw.imitate_tripod.weight = 0.5
+    rw.tripod_pose_error.weight = -0.25
+    rw.track_lin_vel_xy_exp.weight = 2.0
+    rw.track_lin_vel_xy_exp.params["std"] = 0.1
+    rw.track_ang_vel_z_exp.weight = 2.0
+
+
+def _exp2c_mass(env, agent):
+    """2-c + 실측 무게 분포 (몸통 1673 g, 다리 197 g x 6, 팔 395 g). 무게만 바꿔서 2-c 와 비교."""
+    _exp2c(env, agent)
+    use_real_masses(env)
+
+
+def _exp2d(env, agent):
+    """2-d: 2c_mass + 검토 AI 지적 반영.
+    (a) 속도 보상 정리: 앞으로 나아가기(비대칭, 과속에 벌 없음) 끔, vx / vy 추종을 따로
+    (b) 미끄러짐 벌점은 디딜 차례인 발만 + 디딜 차례에 뜬 발 벌점 (발을 띄워 벌점 피하기 막음)
+    (c) [취소] 따라 하기 기준을 선 자세 + wasd 로 바꾸면 검증된 걸음이 아니게 돼서 (검토 AI 2차) 원래 기준 유지
+    (e) 위아래 출렁임 벌점 -0.5 -> -2.0 (튀는 걸음 방지)"""
+    _exp2c_mass(env, agent)
+    rw = env.rewards
+    rw.forward_progress = None
+    rw.track_lin_vel_xy_exp = None
+    rw.track_vx = RewTerm(func=mdp.track_vx_exp, weight=2.0, params={"std": 0.06})
+    rw.track_vy = RewTerm(func=mdp.track_vy_exp, weight=1.0, params={"std": 0.04})
+    rw.foot_slip = None
+    rw.stance_slip = RewTerm(func=mdp.stance_slip, weight=-0.5)
+    rw.stance_air = RewTerm(func=mdp.stance_air, weight=-1.0)
+    rw.tripod_contact.weight = 0.5      # stance_air 와 겹쳐서 낮춤 (검토 AI 2차)
+    rw.lin_vel_z_l2.weight = -2.0
+
+
+def _exp2e(env, agent):
+    """2-e: 2-d + 정책이 최근 4 스텝 관측을 같이 봄 (블라인드라 속도 / 미끄러짐을 히스토리로 짐작)."""
+    _exp2d(env, agent)
+    env.observations.policy.history_length = 4
+
+
+def _exp2f(env, agent):
+    """2-f: 혼합 방식 (JetHexa 논문). CPG 가 tripod 걸음을 만들고 정책은 걸음 크기 · 빠르기 · 회전 + 관절 보정 0.2 rad.
+    걸음 모양은 CPG 가 보장하므로 따라 하기 보상은 끔. 관측에 방향 오차 추가, 방향 오차 벌점 -2.0.
+    속도 보상 / 디딤 벌점 / 무게는 2-d 와 같음."""
+    make_flat(env)
+    use_tripod_gait(env)
+    env.observations.policy.heading_error = ObsTerm(func=mdp.heading_error)
+    make_blind(env)
+    use_wasd_gains(env)
+    use_real_masses(env)
+    agent.obs_groups = {"policy": ["policy"], "critic": ["critic"]}
+    env.actions.joint_pos = None
+    env.actions.cpg = TripodCPGActionCfg()
+    rw = env.rewards
+    rw.imitate_tripod = None
+    rw.tripod_pose_error = None
+    rw.forward_progress = None
+    rw.track_lin_vel_xy_exp = None
+    rw.track_vx = RewTerm(func=mdp.track_vx_exp, weight=2.0, params={"std": 0.06})
+    rw.track_vy = RewTerm(func=mdp.track_vy_exp, weight=1.0, params={"std": 0.04})
+    rw.track_ang_vel_z_exp.weight = 2.0
+    rw.heading = RewTerm(func=mdp.heading_error_l2, weight=-2.0)
+    rw.foot_slip = None
+    rw.stance_slip = RewTerm(func=mdp.stance_slip, weight=-0.5)
+    rw.stance_air = RewTerm(func=mdp.stance_air, weight=-1.0)
+    rw.tripod_contact.weight = 0.5
+    rw.lin_vel_z_l2.weight = -2.0
+
+
+def _exp2g(env, agent):
+    """2-g: 2-f + 장애물 단계에 필요한 행동 / 관측을 미리 넣고 평지에서 다시 학습 (차원이 바뀌면 이어 학습이 안 되므로 한 번에).
+    - 행동 22: 다리 드는 높이 x (1 +- 0.5) 추가 (방지턱 8 cm, 계단 6 cm + 앞 턱. 평지 들림 7.3 cm)
+    - 걸음 빠르기 범위 0.7 ~ 1.3 -> 0.5 ~ 1.3 배 (계단 / 파이프에서 천천히)
+    - 정책 관측에 최근 4 스텝 기억 (블라인드가 발 걸림 / 단차를 알아챌 단서)"""
+    _exp2f(env, agent)
+    env.actions.cpg.use_lift = True
+    env.actions.cpg.freq_scale = (0.5, 1.3)
+    env.observations.policy.history_length = 4
+
+
+def _stage2(env):
+    """2단계 공통: 방지턱 / 구덩이 지형 + 커리큘럼. 검토 AI 3차 지적 반영."""
+    from .stage2_terrain import STAGE2_TERRAINS_CFG  # noqa: PLC0415
+
+    env.scene.terrain.terrain_type = "generator"
+    env.scene.terrain.terrain_generator = copy.deepcopy(STAGE2_TERRAINS_CFG)
+    env.scene.terrain.max_init_terrain_level = 2
+    env.curriculum.terrain_levels = CurrTerm(func=loco_mdp.terrain_levels_vel)
+    env.events.reset_pipes = EventTerm(func=mdp.park_pipes, mode="reset")   # 파이프는 로봇 뒤에 치움
+    env.episode_length_s = 20.0          # 20 s x 0.14 ~ 0.20 m/s = 2.8 ~ 4.0 m. 2 m 넘게 가면 한 단계 위로
+    env.commands.base_velocity.ranges.lin_vel_x = (0.14, 0.20)
+    env.rewards.lin_vel_z_l2.weight = -0.5         # 방지턱을 오르내리는 위아래 움직임은 필요
+    env.rewards.flat_orientation_l2.weight = -0.1  # 경사에서 숙이는 건 조금 허용
+    env.events.physics_material.params["static_friction_range"] = (0.4, 1.0)   # 베이스라인이 마찰 0.5 에서 약함
+    env.events.physics_material.params["dynamic_friction_range"] = (0.3, 0.9)
+
+
+def _exp3a(env, agent):
+    """3-a (2단계): 2-g 정책을 이어 받아 방지턱 / 구덩이 지형에서 학습. 모양 · 폭을 섞고 높이는 낮게 시작해
+    방지턱 10 cm, 구덩이 7 cm 까지 (목표 8 / 5 cm 보다 여유). 2 m 넘게 가면 다음 행(더 높은 장애물).
+    실행: run_exp.sh 3a <iters> 0.18 <2-g 체크포인트>"""
+    _exp2g(env, agent)
+    _stage2(env)
+
+
+EXPERIMENTS = {
+    "1": _exp1,
+    "2b": _exp2b,
+    "2c": _exp2c,
+    "2c_mass": _exp2c_mass,
+    "2d": _exp2d,
+    "2e": _exp2e,
+    "2f": _exp2f,
+    "2g": _exp2g,
+    "3a": _exp3a,
+}
+
+
+def apply(name: str, env_cfg, agent_cfg) -> None:
+    if name not in EXPERIMENTS:
+        raise SystemExit(f"모르는 실험 '{name}'. 있는 것: {', '.join(EXPERIMENTS)}")
+    EXPERIMENTS[name](env_cfg, agent_cfg)
