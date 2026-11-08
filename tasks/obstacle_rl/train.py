@@ -99,6 +99,10 @@ def main() -> None:
         print(f"[train] env {args.num_envs}개, 지형 {terrain}, gait={args.gait}, blind={args.blind}, wasd_gains={args.wasd_gains}")
 
     env = ManagerBasedRLEnv(cfg=env_cfg)
+    # 물리 폭발이 한 스텝이라도 생기면 점수가 수백만으로 튀어 critic 이 발산한다 (3-c 4303 회). 한 스텝 점수를 묶어 둔다.
+    # 정상 한 스텝 점수는 0.1 안팎 (에피소드 합 20 / 1800 스텝).
+    _compute = env.reward_manager.compute
+    env.reward_manager.compute = lambda dt: torch.nan_to_num(_compute(dt), nan=0.0, posinf=1.0, neginf=-1.0).clamp_(-1.0, 1.0)
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
     runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=str(log_dir), device=agent_cfg.device)
     if args.resume:

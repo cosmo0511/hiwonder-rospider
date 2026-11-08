@@ -201,6 +201,8 @@ def make_flat(cfg: RoSpiderObstacleEnvCfg) -> None:
     cfg.scene.terrain.terrain_generator = None
     cfg.curriculum.terrain_levels = None
     cfg.events.reset_pipes = None
+    if getattr(cfg.terminations, "reached_goal", None) is not None:   # 코스 목표는 지형 생성기가 있어야 계산됨
+        cfg.terminations.reached_goal = None
 
 
 def make_blind(cfg: RoSpiderObstacleEnvCfg) -> None:

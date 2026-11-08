@@ -172,6 +172,7 @@ def _exp3b(env, agent):
     # 기본 커리큘럼(2 m 이상 걸었나)은 맵에서 작업대 도착(1.85 m)을 실패로 본다 -> 목표 지점 기준으로
     env.curriculum.terrain_levels = CurrTerm(func=mdp.course_curriculum)
     env.terminations.reached_goal = DoneTerm(func=mdp.reached_goal, time_out=True)   # 작업대 끝에서 떨어지지 않게
+    env.terminations.physics_blowup = DoneTerm(func=mdp.physics_blowup)
 
 
 def _add_perception(env, agent, noise_scale: float = 1.0):

@@ -397,6 +397,21 @@ def reached_goal(env: "ManagerBasedRLEnv", asset_cfg: SceneEntityCfg = SceneEnti
     return (asset.data.root_pos_w[:, 0] - env.scene.env_origins[:, 0]) >= _goals(env)
 
 
+def physics_blowup(env: "ManagerBasedRLEnv", max_lin: float = 3.0, max_ang: float = 30.0,
+                   max_joint_vel: float = 60.0, pipe_names: tuple[str, str] = ("pipe_0", "pipe_1")) -> torch.Tensor:
+    """종료(실패): 물리 폭발 (로봇 / 파이프가 말이 안 되는 속도, NaN). 3-c 4303 회째에 이게 한 번 터져서
+    점수가 수백만으로 튀고 critic 이 발산했다. 정상 걸음은 몸 0.2 m/s, 파이프도 1 m/s 를 넘지 않는다."""
+    robot: Articulation = env.scene["robot"]
+    bad = (robot.data.root_lin_vel_w.norm(dim=-1) > max_lin) | (robot.data.root_ang_vel_w.norm(dim=-1) > max_ang)
+    bad |= robot.data.joint_vel.abs().amax(dim=-1) > max_joint_vel
+    bad |= ~torch.isfinite(robot.data.root_state_w).all(dim=-1)
+    for name in pipe_names:
+        if name in env.scene.rigid_objects:
+            v = env.scene[name].data.root_lin_vel_w
+            bad |= (v.norm(dim=-1) > 2 * max_lin) | ~torch.isfinite(v).all(dim=-1)
+    return bad
+
+
 def course_curriculum(env: "ManagerBasedRLEnv", env_ids, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
     """목표에 도착하면 한 단계 위(더 높은 장애물), 목표의 절반도 못 가면 한 단계 아래."""
     asset: Articulation = env.scene[asset_cfg.name]
