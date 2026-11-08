@@ -289,6 +289,15 @@ def _exp3h(env, agent):
     _exp3g(env, agent)
 
 
+
+def _exp3i(env, agent):
+    """3-i: 3-h 에서 잡음 줄임. 평균을 ±1 안으로 끌어오니 std 0.75 잡음이 실제로 걸음을 흔들어 (회전 · 옆 속도 보상 급락)
+    학습 중 보상이 3-g 의 절반이 됨. 검토 AI 제안대로 std 0.4 로 되돌리고 상한 0.5, 엔트로피 0.005 -> 0.002.
+    실행: TRAIN_EXTRA="--std_reset 0.4 --std_max 0.5 --bound_coef 0.1" run_exp.sh 3i <iters> 0.18 <3-h model_6600>"""
+    _exp3h(env, agent)
+    agent.algorithm.entropy_coef = 0.002
+
+
 EXPERIMENTS = {
     "1": _exp1,
     "2b": _exp2b,
@@ -306,6 +315,7 @@ EXPERIMENTS = {
     "3f": _exp3f,
     "3g": _exp3g,
     "3h": _exp3h,
+    "3i": _exp3i,
 }
 
 

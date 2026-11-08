@@ -33,6 +33,9 @@ parser.add_argument("--name", default=None)
 parser.add_argument("--scan_noise", type=float, default=None, help="정책 높이 지도 잡음 배율 (학습은 1.0)")
 parser.add_argument("--blank_scan", action="store_true", help="정책 높이 지도를 0(평지)으로")
 parser.add_argument("--dump_actions", action="store_true", help="정책 출력(자르기 전) 앞 4 개 평균 / 범위를 코스별로 출력")
+parser.add_argument("--start_x_range", type=float, nargs=2, default=None,
+                    help="출발 x 오프셋 범위 [m] (기본 ±0.02). 뒤로는 치워 둔 파이프(-0.40), 앞으로는 첫 장애물 때문에 약 -0.12 ~ +0.03 까지")
+parser.add_argument("--start_yaw", type=float, default=None, help="출발 방향 오프셋 범위 ±[rad] (기본 0.03, 학습 0.15)")
 parser.add_argument("--no_blowup", action="store_true", help="물리 폭발 종료를 끔 (블라인드 / 기존걸음과 같은 조건으로 비교)")
 parser.add_argument("--maps", nargs="+", default=["map1", "map2"],
                     help="course.SEQUENCES 의 타일 종류. 파이프만 / 계단만 따로 보려면 --maps pipes stairs")
@@ -87,6 +90,10 @@ def main() -> None:
     if getattr(ev, "real_masses", None) is not None:
         ev.real_masses.params["scale_range"] = (1.0, 1.0)
     ev.reset_base.params["pose_range"] = {"x": (-0.02, 0.02), "y": (-0.03, 0.03), "yaw": (-0.03, 0.03)}
+    if args.start_x_range is not None:
+        ev.reset_base.params["pose_range"]["x"] = tuple(args.start_x_range)
+    if args.start_yaw is not None:
+        ev.reset_base.params["pose_range"]["yaw"] = (-args.start_yaw, args.start_yaw)
     ev.reset_base.params["velocity_range"] = {k: (0.0, 0.0) for k in ("x", "y", "z", "roll", "pitch", "yaw")}
     ev.reset_robot_joints.params["position_range"] = (1.0, 1.0)
     cmd = env_cfg.commands.base_velocity
