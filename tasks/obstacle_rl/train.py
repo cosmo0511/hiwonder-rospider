@@ -100,9 +100,33 @@ def main() -> None:
 
     env = ManagerBasedRLEnv(cfg=env_cfg)
     # 물리 폭발이 한 스텝이라도 생기면 점수가 수백만으로 튀어 critic 이 발산한다 (3-c 4303 회). 한 스텝 점수를 묶어 둔다.
-    # 정상 한 스텝 점수는 0.1 안팎 (에피소드 합 20 / 1800 스텝).
+    # 정상 한 스텝 점수는 0.1 안팎, 목표 도착 보너스만 2.0.
     _compute = env.reward_manager.compute
-    env.reward_manager.compute = lambda dt: torch.nan_to_num(_compute(dt), nan=0.0, posinf=1.0, neginf=-1.0).clamp_(-1.0, 1.0)
+    env.reward_manager.compute = lambda dt: torch.nan_to_num(_compute(dt), nan=0.0, posinf=3.0, neginf=-3.0).clamp_(-3.0, 3.0)
+    # 3-c 4407 회: 점수를 묶어도 critic 손실이 매 회 1000 배씩 커짐 -> 관측 어딘가가 비정상. 어느 항목인지 기록하고 ±100 으로 자른다 (관절 속도는 착지 때 40 rad/s 까지 정상).
+    om = env.observation_manager
+    _cg = om.compute_group
+    _warned = {}
+
+    def _checked_group(group_name, update_history=False):
+        out = _cg(group_name, update_history=update_history)
+        if not isinstance(out, torch.Tensor):
+            return out
+        bad = ~torch.isfinite(out) | (out.abs() > 100.0)
+        if bad.any():
+            i0 = 0
+            for name, dim in zip(om.active_terms[group_name], om.group_obs_term_dim[group_name]):
+                n = int(torch.tensor(dim).prod())
+                b = bad[:, i0:i0 + n]
+                if b.any() and _warned.get((group_name, name), 0) < 20:
+                    _warned[(group_name, name)] = _warned.get((group_name, name), 0) + 1
+                    v = out[:, i0:i0 + n][b]
+                    print(f"[obs_guard] {group_name}/{name}: env {int(b.any(dim=1).sum())}개, 값 예 {v[:4].tolist()}", flush=True)
+                i0 += n
+            out = torch.nan_to_num(out, nan=0.0, posinf=100.0, neginf=-100.0).clamp_(-100.0, 100.0)
+        return out
+
+    om.compute_group = _checked_group
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
     runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=str(log_dir), device=agent_cfg.device)
     if args.resume:

@@ -171,7 +171,11 @@ def _exp3b(env, agent):
     env.episode_length_s = 30.0          # 계단 / 작업대까지 2.4 ~ 2.8 m, 계단에서 느려짐
     # 기본 커리큘럼(2 m 이상 걸었나)은 맵에서 작업대 도착(1.85 m)을 실패로 본다 -> 목표 지점 기준으로
     env.curriculum.terrain_levels = CurrTerm(func=mdp.course_curriculum)
-    env.terminations.reached_goal = DoneTerm(func=mdp.reached_goal, time_out=True)   # 작업대 끝에서 떨어지지 않게
+    # 목표 도착 = 진짜 끝(성공). time_out=True 로 두면 rsl_rl 이 그 스텝 점수에 "지금 상태의 가치 x 0.99" 를 더해서
+    # 도착이 잦아지면(77 %) critic 이 자기 값을 키우는 되먹임이 생긴다 -> 3-c 4303 / 4407 회 발산.
+    # 대신 도착 보너스 2.0 (= 계속 걸었으면 받았을 점수 정도: 스텝당 약 0.015 / (1 - 0.99)).
+    env.terminations.reached_goal = DoneTerm(func=mdp.reached_goal, time_out=False)
+    env.rewards.goal_bonus = RewTerm(func=mdp.reached_goal, weight=2.0 / (env.sim.dt * env.decimation))
     env.terminations.physics_blowup = DoneTerm(func=mdp.physics_blowup)
 
 
