@@ -229,6 +229,21 @@ def _exp3c(env, agent):
     _add_perception(env, agent)
 
 
+
+def _exp3d(env, agent):
+    """3-d: 3-c 를 이어 받아 두 가지만 고침 (검토 AI 6차: 원인을 가르려고 속도 보너스는 아직 안 넣음).
+    - 물리 폭발의 관절 속도 기준 60 -> 500 rad/s. 정상 걸음에서도 정강이가 착지 때 60 ~ 146 rad/s 로 튀어
+      (기존걸음도 평균 80) 학습 종료의 7.5 % 가 가짜 실패였다. 이걸 피하려고 천천히 / 발 높이 걷게 됐을 수 있음
+    - 평지 비율 0.04 -> 0.08 (맵 1 / 2 에서 0.02 씩)
+    실행: run_exp.sh 3d <iters> 0.18 <3-c 체크포인트>"""
+    _exp3c(env, agent)
+    env.terminations.physics_blowup.params = {"max_joint_vel": 500.0}
+    subs = env.scene.terrain.terrain_generator.sub_terrains
+    subs["flat"].proportion = 0.08
+    subs["map1"].proportion = 0.13
+    subs["map2"].proportion = 0.13
+
+
 EXPERIMENTS = {
     "1": _exp1,
     "2b": _exp2b,
@@ -241,6 +256,7 @@ EXPERIMENTS = {
     "3a": _exp3a,
     "3b": _exp3b,
     "3c": _exp3c,
+    "3d": _exp3d,
 }
 
 

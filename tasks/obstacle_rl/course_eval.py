@@ -30,6 +30,7 @@ parser.add_argument("--friction", type=float, default=0.8)
 parser.add_argument("--seconds", type=float, default=60.0)
 parser.add_argument("--video", action="store_true")
 parser.add_argument("--name", default=None)
+parser.add_argument("--no_blowup", action="store_true", help="물리 폭발 종료를 끔 (블라인드 / 기존걸음과 같은 조건으로 비교)")
 parser.add_argument("--maps", nargs="+", default=["map1", "map2"],
                     help="course.SEQUENCES 의 타일 종류. 파이프만 / 계단만 따로 보려면 --maps pipes stairs")
 AppLauncher.add_app_launcher_args(parser)
@@ -71,7 +72,7 @@ def main() -> None:
     env_cfg.scene.terrain.terrain_generator = gen
     env_cfg.scene.terrain.max_init_terrain_level = None
     env_cfg.curriculum.terrain_levels = None
-    env_cfg.scene.num_envs = 2 * args.trials
+    env_cfg.scene.num_envs = len(args.maps) * args.trials
     env_cfg.events.reset_pipes = EventTerm(func=obs_mdp.reset_pipes, mode="reset", params={"jitter_x": 0.0})
     env_cfg.events.push_robot = None
     env_cfg.events.base_external_force_torque = None
@@ -97,6 +98,8 @@ def main() -> None:
     env_cfg.terminations.base_contact = None    # 계단에서 몸통이 스쳐도 계속 가게 둔다 (뒤집힘만 실패)
     if getattr(env_cfg.terminations, "reached_goal", None) is not None:   # 도착 순간 리셋되면 위치를 못 읽는다. 판정은 여기서
         env_cfg.terminations.reached_goal = None
+    if args.no_blowup and getattr(env_cfg.terminations, "physics_blowup", None) is not None:
+        env_cfg.terminations.physics_blowup = None
     env_cfg.viewer.origin_type = "asset_root"
     env_cfg.viewer.asset_name = "robot"
     env_cfg.viewer.eye = (-0.7, -1.0, 0.6)
@@ -133,6 +136,12 @@ def main() -> None:
     result = np.array([""] * n, dtype=object)
     t_done = np.zeros(n)
     best = np.zeros(n)
+    # 관절 속도 최댓값 (실물 다리 서보는 약 6 rad/s). 어느 관절이 튀는지 본다
+    jnames = robot.joint_names
+    is_leg = torch.tensor([j.split("_")[0] in ("coxa", "femur", "tibla") for j in jnames], device=env.device)
+    jv_leg = np.zeros(n)
+    jv_other = np.zeros(n)
+    jv_worst = np.array([""] * n, dtype=object)
     steps = int(args.seconds / env.step_dt)
     writers = {}
     if args.video:
@@ -154,6 +163,15 @@ def main() -> None:
         z = pos[:, 2] - origins[:, 2]
         up_z = -robot.data.projected_gravity_b[:, 2].cpu().numpy()
         open_ = result == ""
+        jv = robot.data.joint_vel.abs()
+        leg_now = jv[:, is_leg].amax(dim=-1).cpu().numpy()
+        oth_now = jv[:, ~is_leg].amax(dim=-1).cpu().numpy()
+        arg_now = jv.argmax(dim=-1).cpu().numpy()
+        peak = np.maximum(leg_now, oth_now)
+        for i in np.flatnonzero(open_ & (peak > np.maximum(jv_leg, jv_other))):
+            jv_worst[i] = jnames[int(arg_now[i])]
+        jv_leg = np.where(open_, np.maximum(jv_leg, leg_now), jv_leg)
+        jv_other = np.where(open_, np.maximum(jv_other, oth_now), jv_other)
         best = np.where(open_, np.maximum(best, dx), best)
         d = dones.cpu().numpy().astype(bool)
         tm = env.termination_manager
@@ -196,7 +214,9 @@ def main() -> None:
 
     rows = [{"map": kinds[i], "result": result[i], "time_s": round(float(t_done[i]), 1),
              "best_progress_m": round(float(best[i]), 3), "goal_m": round(float(goal[i]), 3),
-             "reached": where(kinds[i], best[i])} for i in range(n)]
+             "reached": where(kinds[i], best[i]),
+             "max_jv_leg": round(float(jv_leg[i]), 1), "max_jv_other": round(float(jv_other[i]), 1),
+             "worst_joint": jv_worst[i]} for i in range(n)]
     with open(out / "results.csv", "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         w.writeheader()

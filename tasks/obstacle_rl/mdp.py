@@ -397,6 +397,19 @@ def reached_goal(env: "ManagerBasedRLEnv", asset_cfg: SceneEntityCfg = SceneEnti
     return (asset.data.root_pos_w[:, 0] - env.scene.env_origins[:, 0]) >= _goals(env)
 
 
+def goal_bonus_speed(env: "ManagerBasedRLEnv", asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+                     command_name: str = "base_velocity") -> torch.Tensor:
+    """도착 보너스 x 평균 속도 비율 (0 ~ 1). 3-c 는 도착만 보상해서 평지에서도 0.08 m/s 로 느려졌다 (명령 0.18).
+    평균 속도 = 출발점에서 간 거리 / 지난 시간, 명령 속도로 나눈다."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    progress = asset.data.root_pos_w[:, 0] - env.scene.env_origins[:, 0]
+    reached = progress >= _goals(env)
+    elapsed = (env.episode_length_buf.float() + 1.0) * env.step_dt
+    vcmd = env.command_manager.get_command(command_name)[:, 0].clamp(min=0.05)
+    ratio = (progress / (elapsed * vcmd)).clamp(0.0, 1.0)
+    return reached.float() * ratio
+
+
 def physics_blowup(env: "ManagerBasedRLEnv", max_lin: float = 3.0, max_ang: float = 30.0,
                    max_joint_vel: float = 60.0, pipe_names: tuple[str, str] = ("pipe_0", "pipe_1")) -> torch.Tensor:
     """종료(실패): 물리 폭발 (로봇 / 파이프가 말이 안 되는 속도, NaN). 3-c 4303 회째에 이게 한 번 터져서
