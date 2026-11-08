@@ -32,6 +32,7 @@ parser.add_argument("--video", action="store_true")
 parser.add_argument("--name", default=None)
 parser.add_argument("--scan_noise", type=float, default=None, help="정책 높이 지도 잡음 배율 (학습은 1.0)")
 parser.add_argument("--blank_scan", action="store_true", help="정책 높이 지도를 0(평지)으로")
+parser.add_argument("--dump_actions", action="store_true", help="정책 출력(자르기 전) 앞 4 개 평균 / 범위를 코스별로 출력")
 parser.add_argument("--no_blowup", action="store_true", help="물리 폭발 종료를 끔 (블라인드 / 기존걸음과 같은 조건으로 비교)")
 parser.add_argument("--maps", nargs="+", default=["map1", "map2"],
                     help="course.SEQUENCES 의 타일 종류. 파이프만 / 계단만 따로 보려면 --maps pipes stairs")
@@ -156,10 +157,14 @@ def main() -> None:
 
         every = max(1, round(1 / (25 * env.step_dt)))
         first = {k: kinds.index(k) for k in sorted(set(kinds))}
+    raw_acts = []
     for t in range(steps):
         with torch.inference_mode():
             if args.controller == "policy":
-                obs, _, dones, _ = wrapped.step(policy(obs))
+                act = policy(obs)
+                if args.dump_actions:
+                    raw_acts.append(act[:, :4].detach().cpu().numpy().copy())
+                obs, _, dones, _ = wrapped.step(act)
                 obs = obs[0] if isinstance(obs, tuple) else obs
             else:
                 _, _, term, trunc, _ = env.step(tripod.act(vx=1.0, wz=0.0))
@@ -237,6 +242,13 @@ def main() -> None:
             reach[r["reached"]] = reach.get(r["reached"], 0) + 1
         lines.append(f"  {k}: 완주 {ok}/{len(rs)}, 평균 진척 {np.mean([r['best_progress_m'] for r in rs]):.2f} / "
                      f"{rs[0]['goal_m']:.2f} m, 가장 멀리 간 곳 {reach}")
+    if raw_acts:
+        ra = np.stack(raw_acts)   # (스텝, env, 4) : 걸음 크기, 걸음 빠르기, 회전, 다리 높이
+        for k in sorted(set(kinds)):
+            idx = [i for i in range(n) if kinds[i] == k]
+            r = ra[:, idx].reshape(-1, 4)
+            lines.append(f"  [정책 출력 자르기 전] {k}: 평균 {np.round(r.mean(0), 2).tolist()}, "
+                         f"5 % {np.round(np.percentile(r, 5, 0), 2).tolist()}, 95 % {np.round(np.percentile(r, 95, 0), 2).tolist()}")
     (out / "summary.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
     print("\n".join(lines), flush=True)
     env.close()
