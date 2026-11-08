@@ -30,6 +30,8 @@ parser.add_argument("--friction", type=float, default=0.8)
 parser.add_argument("--seconds", type=float, default=60.0)
 parser.add_argument("--video", action="store_true")
 parser.add_argument("--name", default=None)
+parser.add_argument("--scan_noise", type=float, default=None, help="정책 높이 지도 잡음 배율 (학습은 1.0)")
+parser.add_argument("--blank_scan", action="store_true", help="정책 높이 지도를 0(평지)으로")
 parser.add_argument("--no_blowup", action="store_true", help="물리 폭발 종료를 끔 (블라인드 / 기존걸음과 같은 조건으로 비교)")
 parser.add_argument("--maps", nargs="+", default=["map1", "map2"],
                     help="course.SEQUENCES 의 타일 종류. 파이프만 / 계단만 따로 보려면 --maps pipes stairs")
@@ -98,6 +100,11 @@ def main() -> None:
     env_cfg.terminations.base_contact = None    # 계단에서 몸통이 스쳐도 계속 가게 둔다 (뒤집힘만 실패)
     if getattr(env_cfg.terminations, "reached_goal", None) is not None:   # 도착 순간 리셋되면 위치를 못 읽는다. 판정은 여기서
         env_cfg.terminations.reached_goal = None
+    perc = getattr(env_cfg.observations, "perception", None)
+    if perc is not None and args.scan_noise is not None:
+        perc.scan.params["noise_scale"] = args.scan_noise
+    if perc is not None and args.blank_scan:
+        perc.scan.params["blank"] = True
     if args.no_blowup and getattr(env_cfg.terminations, "physics_blowup", None) is not None:
         env_cfg.terminations.physics_blowup = None
     env_cfg.viewer.origin_type = "asset_root"

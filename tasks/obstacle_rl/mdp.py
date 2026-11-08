@@ -498,8 +498,11 @@ class PerceptiveScan(ManagerTermBase):
         self.delay[env_ids] = torch.randint(1, 3, self.delay[env_ids].shape, device=self.delay.device)
         self.fresh[env_ids] = True
 
-    def __call__(self, env, sensor_name: str, noise: bool = True, noise_scale: float = 1.0, pipes: bool = True):
+    def __call__(self, env, sensor_name: str, noise: bool = True, noise_scale: float = 1.0, pipes: bool = True,
+                 blank: bool = False):
         h = _scan_heights(env, sensor_name, pipes)
+        if blank:   # 평가용: 지도를 평지(0)로 -> 정책이 지도를 실제로 쓰는지 확인
+            return torch.zeros_like(h)
         if not noise:
             return h
         h = h + self.bias + torch.randn_like(h) * 0.01 * self.scale * (1.0 + self.far)
