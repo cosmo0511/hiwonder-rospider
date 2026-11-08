@@ -73,7 +73,7 @@ if args.stair_tread is not None:
 if args.stair_rise is not None or args.stair_tread is not None:
     print(f"[course_eval] 계단 단 높이 {course.STAIR_RISE * 100:.1f} cm, 디딤판 {course.STAIR_TREAD * 100:.1f} cm", flush=True)
 
-PLAT_Z = 0.20       # 몸통 루트가 이 높이를 넘으면 작업대 위 (작업대 0.24 m)
+PLAT_Z = course.STAIR_N * course.STAIR_RISE - 0.04   # 몸통 루트가 이 높이를 넘으면 작업대 위 (기본 작업대 0.24 m -> 0.20). --stair_rise 를 따라감
 LANE_HALF = 0.55    # 코스 폭 1.1 m
 
 
