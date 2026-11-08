@@ -256,6 +256,15 @@ def _exp3e(env, agent):
     env.rewards.goal_bonus = RewTerm(func=mdp.goal_bonus_speed, weight=2.0 / (env.sim.dt * env.decimation))
 
 
+
+def _exp3f(env, agent):
+    """3-f: 3-e 와 같은 설정. 다른 점은 train.py 에서 행동 잡음 std 를 0.5 로 되돌리고 매번 0.8 이하로 묶는 것.
+    3-c 에서 행동을 ±1 로 자르기 시작한 뒤 std 가 1 -> 4 (3-c 끝) -> 10 ~ 15 (3-e) 로 커져서,
+    학습 중 행동이 거의 ±1 무작위였다 -> 평균 행동(평가)의 평지 속도가 보상을 바꿔도 0.08 m/s 에서 안 움직였다.
+    실행: TRAIN_EXTRA="--std_reset 0.5 --std_max 0.8" run_exp.sh 3f <iters> 0.18 <3-e 체크포인트>"""
+    _exp3e(env, agent)
+
+
 EXPERIMENTS = {
     "1": _exp1,
     "2b": _exp2b,
@@ -270,6 +279,7 @@ EXPERIMENTS = {
     "3c": _exp3c,
     "3d": _exp3d,
     "3e": _exp3e,
+    "3f": _exp3f,
 }
 
 

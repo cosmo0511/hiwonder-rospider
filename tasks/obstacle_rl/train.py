@@ -32,6 +32,8 @@ parser.add_argument("--seed", type=int, default=42)
 parser.add_argument("--height_curriculum", action="store_true",
                     help="난이도(행)에 따라 높이를 0.5 배 -> 1 배로. 기본은 실물 높이 고정")
 parser.add_argument("--resume", type=str, default=None, help="이어 학습할 체크포인트 (.pt)")
+parser.add_argument("--std_reset", type=float, default=None, help="이어 받은 뒤 행동 잡음 std 를 이 값으로 (3-e 까지 std 가 10 넘게 커짐)")
+parser.add_argument("--std_max", type=float, default=None, help="매 업데이트 뒤 행동 잡음 std 상한")
 parser.add_argument("--exp", default=None, help="experiments.py 의 실험 이름 (예: 2c). 주면 --flat/--gait/--blind/--wasd_gains 는 무시")
 parser.add_argument("--flat", action="store_true", help="평지에서 보행만 (1단계). 장애물 학습은 이 체크포인트를 --resume")
 parser.add_argument("--gait", action="store_true", help="wasd tripod 걸음 모방 + 박자 관측 (1단계)")
@@ -134,6 +136,23 @@ def main() -> None:
         # expand_ckpt.py 로 입력을 늘린 체크포인트는 옵티마이저 상태가 없다 -> 새로 시작
         has_opt = "optimizer_state_dict" in torch.load(args.resume, map_location="cpu", weights_only=False)
         runner.load(args.resume, load_optimizer=has_opt)
+    # 행동은 ±1 로 잘리는데 잡음 std 에는 상한이 없어서, 엔트로피 보너스가 std 를 키움 (3-c 1 -> 3-e 10 ~ 15).
+    # 그러면 학습 때는 거의 ±1 무작위 행동이고 평가(평균 행동)와 딴판이 된다
+    std_param = runner.alg.policy.std
+    if args.std_reset is not None:
+        with torch.no_grad():
+            std_param.fill_(args.std_reset)
+        print(f"[train] 행동 잡음 std -> {args.std_reset}")
+    if args.std_max is not None:
+        _update = runner.alg.update
+
+        def _update_clamped(*a, **k):
+            out = _update(*a, **k)
+            with torch.no_grad():
+                std_param.clamp_(max=args.std_max)
+            return out
+
+        runner.alg.update = _update_clamped
     runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
     env.close()
 

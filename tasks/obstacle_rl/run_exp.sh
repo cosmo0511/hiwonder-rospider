@@ -14,7 +14,7 @@ mkdir -p "$OUT"
 
 # 노트북이 절전으로 학습을 끊지 않게 잡아 둔다
 systemd-inhibit --what=sleep:idle --who=rospider-rl --why="RL exp $EXP" \
-  python tasks/obstacle_rl/train.py --headless --num_envs 2048 --max_iterations "$ITERS" --exp "$EXP" "${RESUME_ARG[@]}" \
+  python tasks/obstacle_rl/train.py --headless --num_envs 2048 --max_iterations "$ITERS" --exp "$EXP" "${RESUME_ARG[@]}" ${TRAIN_EXTRA:-} \
   > "$OUT/train_exp$EXP.log" 2>&1
 echo "[run_exp] 학습 종료 코드 $?"
 
