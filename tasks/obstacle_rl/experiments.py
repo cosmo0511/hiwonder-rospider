@@ -298,6 +298,20 @@ def _exp3i(env, agent):
     agent.algorithm.entropy_coef = 0.002
 
 
+
+def _exp3j(env, agent):
+    """3-j: 3-i 에 실물보다 높은 계단까지. 3-i 는 단 6 cm 에서만 배워서 7 cm 85 %, 8 cm 40 %, 9 cm 5 % 로 여유가 작았다.
+    코스 타일 높이 배율을 0.5 ~ 1.0 -> 0.5 ~ 1.5 (단 3 ~ 9 cm, 방지턱 · 구덩이도 같이 커짐). 실물(1.0)은 중간 난이도가 된다.
+    2단계 타일(arc_bump / box_pit)은 그대로.
+    실행: TRAIN_EXTRA="--std_max 0.5 --bound_coef 0.1" run_exp.sh 3j <iters> 0.18 <3-i 체크포인트>"""
+    from .terrain_cfg import RoSpiderTileCfg  # noqa: PLC0415
+
+    _exp3i(env, agent)
+    for sub in env.scene.terrain.terrain_generator.sub_terrains.values():
+        if isinstance(sub, RoSpiderTileCfg):
+            sub.height_scale_range = (0.5, 1.5)
+
+
 EXPERIMENTS = {
     "1": _exp1,
     "2b": _exp2b,
@@ -316,6 +330,7 @@ EXPERIMENTS = {
     "3g": _exp3g,
     "3h": _exp3h,
     "3i": _exp3i,
+    "3j": _exp3j,
 }
 
 

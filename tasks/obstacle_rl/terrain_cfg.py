@@ -86,10 +86,10 @@ REAL_COURSE_TERRAINS_CFG = TerrainGeneratorCfg(
 )
 
 
-def enable_height_curriculum(gen_cfg: TerrainGeneratorCfg, low: float = 0.5) -> None:
-    """행(난이도)에 따라 높이를 low 배 -> 1 배로 키운다. 학습이 안 오를 때만 쓴다."""
+def enable_height_curriculum(gen_cfg: TerrainGeneratorCfg, low: float = 0.5, high: float = 1.0) -> None:
+    """행(난이도)에 따라 높이를 low 배 -> high 배로 키운다. high > 1 이면 실물보다 높은 장애물까지 (3-j)."""
     for sub in gen_cfg.sub_terrains.values():
-        sub.height_scale_range = (low, 1.0)
+        sub.height_scale_range = (low, high)
 
 
 def column_kinds(gen_cfg: TerrainGeneratorCfg) -> list[str]:
