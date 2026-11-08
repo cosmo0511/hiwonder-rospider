@@ -34,6 +34,7 @@ parser.add_argument("--height_curriculum", action="store_true",
 parser.add_argument("--resume", type=str, default=None, help="이어 학습할 체크포인트 (.pt)")
 parser.add_argument("--std_reset", type=float, default=None, help="이어 받은 뒤 행동 잡음 std 를 이 값으로 (3-e 까지 std 가 10 넘게 커짐)")
 parser.add_argument("--std_max", type=float, default=None, help="매 업데이트 뒤 행동 잡음 std 상한")
+parser.add_argument("--bound_coef", type=float, default=0.0, help="정책 평균이 ±1 밖으로 나간 만큼 끌어당기는 계수 (0 이면 끔)")
 parser.add_argument("--exp", default=None, help="experiments.py 의 실험 이름 (예: 2c). 주면 --flat/--gait/--blind/--wasd_gains 는 무시")
 parser.add_argument("--flat", action="store_true", help="평지에서 보행만 (1단계). 장애물 학습은 이 체크포인트를 --resume")
 parser.add_argument("--gait", action="store_true", help="wasd tripod 걸음 모방 + 박자 관측 (1단계)")
@@ -153,6 +154,51 @@ def main() -> None:
             return out
 
         runner.alg.update = _update_clamped
+    # 행동이 ±1 로 잘리니 정책 평균이 ±1 밖으로 나가면 샘플이 전부 같은 값으로 잘려 그 차원은 기울기가 0 이 된다
+    # (3-f 평지: 주기 -38, 회전 +31 에 고정). rl_games 의 bounds_loss 처럼 ±1 밖으로 나간 만큼만 평균을 끌어당긴다.
+    # 앞 계산은 그대로라 (잘린) 평균 행동은 안 바뀌고, 역전파에만 coef * d/dmu (relu(|mu|-1)^2) 를 더한다
+    if args.bound_coef > 0:
+        from torch.distributions import Normal
+
+        coef = args.bound_coef
+
+        class _BoundGrad(torch.autograd.Function):
+            @staticmethod
+            def forward(ctx, mu):
+                ctx.save_for_backward(mu)
+                return mu.view_as(mu)
+
+            @staticmethod
+            def backward(ctx, g):
+                (mu,) = ctx.saved_tensors
+                excess = torch.relu(mu - 1.0) - torch.relu(-1.0 - mu)
+                return g + coef * 2.0 * excess / mu.shape[0]
+
+        policy = runner.alg.policy
+        _upd_dist = policy.update_distribution
+
+        def _upd_dist_bounded(obs):
+            _upd_dist(obs)
+            d = policy.distribution
+            if torch.is_grad_enabled():
+                policy.distribution = Normal(_BoundGrad.apply(d.mean), d.stddev)
+
+        policy.update_distribution = _upd_dist_bounded
+        _update_b = runner.alg.update
+        n_upd = [0]
+
+        def _update_logged(*a, **k):
+            out = _update_b(*a, **k)
+            n_upd[0] += 1
+            if n_upd[0] % 50 == 1:
+                mu = policy.distribution.mean.detach()
+                over = (mu.abs() - 1.0).clamp(min=0.0)
+                print(f"[bound] 평균 행동 ±1 밖 비율 {float((over > 0).float().mean()):.3f}, "
+                      f"넘친 양 평균 {float(over.mean()):.3f}, 앞 4개 |평균| {mu[:, :4].abs().mean(0).tolist()}", flush=True)
+            return out
+
+        runner.alg.update = _update_logged
+        print(f"[train] 행동 범위 밖 평균 끌어당기기 coef {coef}")
     runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
     env.close()
 

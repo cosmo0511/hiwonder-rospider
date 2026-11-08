@@ -281,6 +281,14 @@ def _exp3g(env, agent):
     env.rewards.goal_bonus = RewTerm(func=mdp.goal_bonus_speed, weight=2.0 / (env.sim.dt * env.decimation))
 
 
+def _exp3h(env, agent):
+    """3-h: 3-g 그대로 + 정책 평균이 ±1 밖으로 나간 만큼 끌어당김 (train.py --bound_coef).
+    3-c / 3-f / 3-g 모두 주기 / 회전 / 보폭 출력이 ±1 밖에 붙어 있었다 (3-f 평지 주기 평균 -38).
+    샘플이 전부 같은 값으로 잘려 그 차원은 기울기가 0 -> 평지에서도 최저 주기로 느리게 걷는 원인 후보.
+    실행: TRAIN_EXTRA="--std_max 0.8 --bound_coef 0.1" run_exp.sh 3h <iters> 0.18 <3-g 체크포인트>"""
+    _exp3g(env, agent)
+
+
 EXPERIMENTS = {
     "1": _exp1,
     "2b": _exp2b,
@@ -297,6 +305,7 @@ EXPERIMENTS = {
     "3e": _exp3e,
     "3f": _exp3f,
     "3g": _exp3g,
+    "3h": _exp3h,
 }
 
 
