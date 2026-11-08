@@ -151,6 +151,8 @@ def main() -> None:
     env_cfg.observations.policy.enable_corruption = False
     env_cfg.episode_length_s = TIMEOUT_S + 5.0
     env_cfg.terminations.base_contact = None    # obstacle_sweep 처럼 몸통 접촉으로 끝내지 않음 (기록만)
+    if getattr(env_cfg.terminations, "reached_goal", None) is not None:   # 3단계 실험: 도착 순간 리셋되면 판정을 못 함
+        env_cfg.terminations.reached_goal = None
     env_cfg.events.reset_pipes = EventTerm(func=mdp.park_pipes, mode="reset")
 
     env = ManagerBasedRLEnv(cfg=env_cfg)
