@@ -36,6 +36,8 @@ parser.add_argument("--dump_actions", action="store_true", help="정책 출력(�
 parser.add_argument("--start_x_range", type=float, nargs=2, default=None,
                     help="출발 x 오프셋 범위 [m] (기본 ±0.02). 뒤로는 치워 둔 파이프(-0.40), 앞으로는 첫 장애물 때문에 약 -0.12 ~ +0.03 까지")
 parser.add_argument("--start_yaw", type=float, default=None, help="출발 방향 오프셋 범위 ±[rad] (기본 0.03, 학습 0.15)")
+parser.add_argument("--stair_rise", type=float, default=None, help="계단 단 높이 [m] (기본 course.STAIR_RISE 0.06)")
+parser.add_argument("--stair_tread", type=float, default=None, help="계단 디딤판 길이 [m] (기본 course.STAIR_TREAD 0.15)")
 parser.add_argument("--no_blowup", action="store_true", help="물리 폭발 종료를 끔 (블라인드 / 기존걸음과 같은 조건으로 비교)")
 parser.add_argument("--maps", nargs="+", default=["map1", "map2"],
                     help="course.SEQUENCES 의 타일 종류. 파이프만 / 계단만 따로 보려면 --maps pipes stairs")
@@ -60,6 +62,16 @@ from obstacle_rl.agents.rsl_rl_ppo_cfg import RoSpiderObstaclePPORunnerCfg  # no
 from obstacle_rl.baseline import TripodBaseline  # noqa: E402
 from obstacle_rl.env_cfg import use_wasd_gains  # noqa: E402
 from obstacle_rl.terrain_cfg import REAL_COURSE_TERRAINS_CFG, RoSpiderTileCfg, column_kinds  # noqa: E402
+
+# 계단 치수 바꾸기 (평가 전용). course 함수들은 부를 때 모듈 값을 읽으니 지형을 만들기 전에 바꾸면 된다.
+# LENGTH 만 import 때 계산되므로 다시 넣는다
+if args.stair_rise is not None:
+    course.STAIR_RISE = args.stair_rise
+if args.stair_tread is not None:
+    course.STAIR_TREAD = args.stair_tread
+    course.LENGTH["stairs"] = course.STAIR_N * course.STAIR_TREAD
+if args.stair_rise is not None or args.stair_tread is not None:
+    print(f"[course_eval] 계단 단 높이 {course.STAIR_RISE * 100:.1f} cm, 디딤판 {course.STAIR_TREAD * 100:.1f} cm", flush=True)
 
 PLAT_Z = 0.20       # 몸통 루트가 이 높이를 넘으면 작업대 위 (작업대 0.24 m)
 LANE_HALF = 0.55    # 코스 폭 1.1 m
