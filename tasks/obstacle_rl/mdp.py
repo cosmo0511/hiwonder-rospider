@@ -407,7 +407,7 @@ def goal_bonus_speed(env: "ManagerBasedRLEnv", asset_cfg: SceneEntityCfg = Scene
     elapsed = (env.episode_length_buf.float() + 1.0) * env.step_dt
     vcmd = env.command_manager.get_command(command_name)[:, 0].clamp(min=0.05)
     ratio = (progress / (elapsed * vcmd)).clamp(0.0, 1.0)
-    return reached.float() * ratio
+    return reached.float() * (0.5 + 0.5 * ratio)   # 계단에서는 명령 속도를 못 내므로 절반은 그냥 준다 (검토 AI 6차)
 
 
 def physics_blowup(env: "ManagerBasedRLEnv", max_lin: float = 3.0, max_ang: float = 30.0,

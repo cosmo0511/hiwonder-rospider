@@ -244,6 +244,18 @@ def _exp3d(env, agent):
     subs["map2"].proportion = 0.13
 
 
+
+def _exp3e(env, agent):
+    """3-e: 3-d 를 이어 받아 평지 속도를 되살린다. 3-d 에서 물리 폭발 기준을 고쳐도 평지 0.080 m/s 그대로였음.
+    원인: 전진 속도 보상 std 0.06 이 좁아서 0.08 m/s (오차 0.1) 에서는 보상이 거의 0 -> 빨라질 쪽으로 기울기가 없다.
+    - 넓은 전진 속도 보상 추가 (std 0.15, 가중치 1.0): 오차 0.1 에서 0.64, 느린 걸음에서도 빨라지는 방향을 알려줌
+    - 도착 보너스를 평균 속도 비율로 (0.5 + 0.5 x 비율)
+    실행: run_exp.sh 3e <iters> 0.18 <3-d 체크포인트>"""
+    _exp3d(env, agent)
+    env.rewards.track_vx_coarse = RewTerm(func=mdp.track_vx_exp, weight=1.0, params={"std": 0.15})
+    env.rewards.goal_bonus = RewTerm(func=mdp.goal_bonus_speed, weight=2.0 / (env.sim.dt * env.decimation))
+
+
 EXPERIMENTS = {
     "1": _exp1,
     "2b": _exp2b,
@@ -257,6 +269,7 @@ EXPERIMENTS = {
     "3b": _exp3b,
     "3c": _exp3c,
     "3d": _exp3d,
+    "3e": _exp3e,
 }
 
 
