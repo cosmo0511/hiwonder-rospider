@@ -265,6 +265,22 @@ def _exp3f(env, agent):
     _exp3e(env, agent)
 
 
+
+def _exp3g(env, agent):
+    """3-g: 땅 못 보는(블라인드) 정책을 계단까지 학습. 실물에는 높이 지도가 없으니 카메라 없이 어디까지 되는지 본다.
+    3-a 는 방지턱 / 구덩이만 배웠고 계단은 한 번도 안 배웠다 (3-b 를 건너뜀). 3-b 코스 지형 + 3-d / 3-e / 3-f 에서 고친 것:
+    물리 폭발 관절 기준 500, 평지 0.08, 넓은 속도 보상, 속도 비례 도착 보너스, std 상한 (train.py --std_max).
+    실행: TRAIN_EXTRA="--std_max 0.8" run_exp.sh 3g <iters> 0.18 <3-a 체크포인트>"""
+    _exp3b(env, agent)
+    env.terminations.physics_blowup.params = {"max_joint_vel": 500.0}
+    subs = env.scene.terrain.terrain_generator.sub_terrains
+    subs["flat"].proportion = 0.08
+    subs["map1"].proportion = 0.13
+    subs["map2"].proportion = 0.13
+    env.rewards.track_vx_coarse = RewTerm(func=mdp.track_vx_exp, weight=1.0, params={"std": 0.15})
+    env.rewards.goal_bonus = RewTerm(func=mdp.goal_bonus_speed, weight=2.0 / (env.sim.dt * env.decimation))
+
+
 EXPERIMENTS = {
     "1": _exp1,
     "2b": _exp2b,
@@ -280,6 +296,7 @@ EXPERIMENTS = {
     "3d": _exp3d,
     "3e": _exp3e,
     "3f": _exp3f,
+    "3g": _exp3g,
 }
 
 
