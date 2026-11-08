@@ -402,13 +402,21 @@ def physics_blowup(env: "ManagerBasedRLEnv", max_lin: float = 3.0, max_ang: floa
     """종료(실패): 물리 폭발 (로봇 / 파이프가 말이 안 되는 속도, NaN). 3-c 4303 회째에 이게 한 번 터져서
     점수가 수백만으로 튀고 critic 이 발산했다. 정상 걸음은 몸 0.2 m/s, 파이프도 1 m/s 를 넘지 않는다."""
     robot: Articulation = env.scene["robot"]
-    bad = (robot.data.root_lin_vel_w.norm(dim=-1) > max_lin) | (robot.data.root_ang_vel_w.norm(dim=-1) > max_ang)
-    bad |= robot.data.joint_vel.abs().amax(dim=-1) > max_joint_vel
-    bad |= ~torch.isfinite(robot.data.root_state_w).all(dim=-1)
+    why = {
+        "몸 속도": robot.data.root_lin_vel_w.norm(dim=-1) > max_lin,
+        "몸 회전": robot.data.root_ang_vel_w.norm(dim=-1) > max_ang,
+        "관절 속도": robot.data.joint_vel.abs().amax(dim=-1) > max_joint_vel,
+        "NaN": ~torch.isfinite(robot.data.root_state_w).all(dim=-1),
+    }
     for name in pipe_names:
         if name in env.scene.rigid_objects:
             v = env.scene[name].data.root_lin_vel_w
-            bad |= (v.norm(dim=-1) > 2 * max_lin) | ~torch.isfinite(v).all(dim=-1)
+            why[f"{name} 속도"] = (v.norm(dim=-1) > 2 * max_lin) | ~torch.isfinite(v).all(dim=-1)
+    # 평가 스크립트가 어느 조건에 걸렸는지 볼 수 있게 남겨 둔다
+    env._blowup_why = why
+    bad = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+    for b in why.values():
+        bad |= b
     return bad
 
 

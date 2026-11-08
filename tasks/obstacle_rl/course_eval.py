@@ -30,6 +30,8 @@ parser.add_argument("--friction", type=float, default=0.8)
 parser.add_argument("--seconds", type=float, default=60.0)
 parser.add_argument("--video", action="store_true")
 parser.add_argument("--name", default=None)
+parser.add_argument("--maps", nargs="+", default=["map1", "map2"],
+                    help="course.SEQUENCES 의 타일 종류. 파이프만 / 계단만 따로 보려면 --maps pipes stairs")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
 
@@ -50,7 +52,7 @@ from obstacle_rl import mdp as obs_mdp  # noqa: E402
 from obstacle_rl.agents.rsl_rl_ppo_cfg import RoSpiderObstaclePPORunnerCfg  # noqa: E402
 from obstacle_rl.baseline import TripodBaseline  # noqa: E402
 from obstacle_rl.env_cfg import use_wasd_gains  # noqa: E402
-from obstacle_rl.terrain_cfg import REAL_COURSE_TERRAINS_CFG, column_kinds  # noqa: E402
+from obstacle_rl.terrain_cfg import REAL_COURSE_TERRAINS_CFG, RoSpiderTileCfg, column_kinds  # noqa: E402
 
 PLAT_Z = 0.20       # 몸통 루트가 이 높이를 넘으면 작업대 위 (작업대 0.24 m)
 LANE_HALF = 0.55    # 코스 폭 1.1 m
@@ -63,6 +65,8 @@ def main() -> None:
 
     env_cfg, agent_cfg = experiments_env(args.exp)
     gen = copy.deepcopy(REAL_COURSE_TERRAINS_CFG)
+    gen.sub_terrains = {k: RoSpiderTileCfg(kind=k, proportion=1.0 / len(args.maps)) for k in args.maps}
+    gen.num_cols = len(args.maps)
     env_cfg.scene.terrain.terrain_type = "generator"
     env_cfg.scene.terrain.terrain_generator = gen
     env_cfg.scene.terrain.max_init_terrain_level = None
@@ -91,6 +95,8 @@ def main() -> None:
     env_cfg.observations.policy.enable_corruption = False
     env_cfg.episode_length_s = args.seconds + 5.0
     env_cfg.terminations.base_contact = None    # 계단에서 몸통이 스쳐도 계속 가게 둔다 (뒤집힘만 실패)
+    if getattr(env_cfg.terminations, "reached_goal", None) is not None:   # 도착 순간 리셋되면 위치를 못 읽는다. 판정은 여기서
+        env_cfg.terminations.reached_goal = None
     env_cfg.viewer.origin_type = "asset_root"
     env_cfg.viewer.asset_name = "robot"
     env_cfg.viewer.eye = (-0.7, -1.0, 0.6)
@@ -120,7 +126,9 @@ def main() -> None:
     kinds = [kinds_by_col[int(c)] for c in env.scene.terrain.terrain_types.tolist()]
     origins = env.scene.env_origins.cpu().numpy()
     start = robot.data.root_pos_w.cpu().numpy().copy()
-    goal = np.array([course.layout(k)["plat"] - course.origin(k)[0] for k in kinds])
+    # 작업대가 있으면 작업대 시작, 없으면 마지막 장애물 끝 + 0.35 m (obstacle_sweep 판정)
+    goal = np.array([obs_mdp._goal_dist(k) - (0.25 if "plat" in course.layout(k) else 0.0) for k in kinds])
+    need_plat = np.array(["plat" in course.layout(k) for k in kinds])
     marks = {k: {o: course.layout(k)[o] - course.origin(k)[0] for o in course.layout(k)} for k in set(kinds)}
     result = np.array([""] * n, dtype=object)
     t_done = np.zeros(n)
@@ -148,9 +156,14 @@ def main() -> None:
         open_ = result == ""
         best = np.where(open_, np.maximum(best, dx), best)
         d = dones.cpu().numpy().astype(bool)
+        tm = env.termination_manager
+        blow = tm.get_term("physics_blowup").cpu().numpy() if "physics_blowup" in tm.active_terms else None
         for i in np.flatnonzero(open_):
-            if z[i] > PLAT_Z and dx[i] > goal[i]:
+            if dx[i] > goal[i] and (z[i] > PLAT_Z or not need_plat[i]):
                 result[i] = "완주"
+            elif d[i] and blow is not None and blow[i]:
+                why = getattr(env, "_blowup_why", {})
+                result[i] = "실패:물리폭발(" + ",".join(k for k, v in why.items() if bool(v[i])) + ")"
             elif d[i] or up_z[i] < 0.5:
                 result[i] = "실패:뒤집힘"
             elif abs(dy[i]) > LANE_HALF:
