@@ -21,5 +21,7 @@ python tasks/obstacle_rl/play.py --checkpoint logs/rsl_rl/rospider_obstacle/<날
 | `train.py`, `play.py` | 학습, 평가 |
 | `test_course.py` | 지형 기하 검사 |
 
-**상태 (2026-11-01)**: 지형 검사(`test_course.py`)만 통과. Isaac Lab 에서는 아직 돌리지 않았다.
-보상 가중치, 다리 PD 게인, ㄴ자 용접판 크기는 맞춰 보지 않은 출발값이다.
+**상태 (2026-11-09)**: 땅을 보는 CPG + RL 정책이 실물 코스 맵 1 10/10, 맵 2 8/10 완주 (기존 걸음 0/10).
+결과와 흐름은 [POLICY_SUMMARY.md](POLICY_SUMMARY.md), 시간순 기록은 [NIGHT_LOG.md](NIGHT_LOG.md).
+실험 하나 돌리기: `bash tasks/obstacle_rl/run_exp.sh <실험> <회수> 0.18 <이어받을 체크포인트>` (실험 목록은 `experiments.py`),
+코스 평가: `python tasks/obstacle_rl/course_eval.py --headless --controller policy --exp <실험> --checkpoint <ckpt> --maps map1 map2 pipes stairs`.
