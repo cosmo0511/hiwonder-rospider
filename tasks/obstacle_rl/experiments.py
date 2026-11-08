@@ -177,6 +177,8 @@ def _exp3b(env, agent):
     env.terminations.reached_goal = DoneTerm(func=mdp.reached_goal, time_out=False)
     env.rewards.goal_bonus = RewTerm(func=mdp.reached_goal, weight=2.0 / (env.sim.dt * env.decimation))
     env.terminations.physics_blowup = DoneTerm(func=mdp.physics_blowup)
+    # CPG 행동은 안에서 ±1 로 잘라 쓰는데, 자르기 전 값(100 ~ 180 까지 튐)이 "직전 행동" 관측으로 들어가 critic 을 흔들었다.
+    agent.clip_actions = 1.0
 
 
 def _add_perception(env, agent, noise_scale: float = 1.0):
