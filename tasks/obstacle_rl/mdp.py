@@ -342,6 +342,19 @@ def track_vy_exp(env: "ManagerBasedRLEnv", std: float = 0.04, command_name: str 
     return torch.exp(-err.square() / std**2)
 
 
+def track_vy_mean_exp(env: "ManagerBasedRLEnv", tau: float = 2.0, std: float = 0.02,
+                      command_name: str = "base_velocity") -> torch.Tensor:
+    """보상: 옆 속도의 느린 평균(시상수 tau 초)이 명령 vy 를 따르게. track_vy 는 걸음마다 흔들리는 순간 속도라
+    한쪽으로 천천히 쌓이는 쏠림(3-l: 계단까지 평균 20 cm 오른쪽)을 거의 못 잡는다."""
+    asset: Articulation = env.scene["robot"]
+    vy = asset.data.root_lin_vel_b[:, 1] - env.command_manager.get_command(command_name)[:, 1]
+    if not hasattr(env, "_vy_ema"):
+        env._vy_ema = torch.zeros_like(vy)
+    env._vy_ema = torch.where(env.episode_length_buf <= 1, torch.zeros_like(vy), env._vy_ema)
+    env._vy_ema += (vy - env._vy_ema) * (env.step_dt / tau)
+    return torch.exp(-env._vy_ema.square() / std**2)
+
+
 def heading_error(env: "ManagerBasedRLEnv", command_name: str = "base_velocity") -> torch.Tensor:
     """관측: 목표 방향 - 몸 방향 (rad, -pi ~ pi). 실기에서는 IMU 요 각속도를 적분해 얻는다 (JetHexa 논문과 같음)."""
     term = env.command_manager.get_term(command_name)

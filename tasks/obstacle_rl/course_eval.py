@@ -193,6 +193,10 @@ def main() -> None:
     robot.update = update_and_record
     jv_leg = np.zeros(n)
     jv_other = np.zeros(n)
+    # 옆 위치: 장애물마다 그 시작선을 처음 넘을 때 y (출발 기준), 최대 |y|
+    y0 = start[:, 1] - origins[:, 1]
+    dy_at = {o: np.full(n, np.nan) for o in ("pit", "bump", "pipes", "stairs", "plat")}
+    dy_max = np.zeros(n)
     jv_worst = np.array([""] * n, dtype=object)
     steps = int(args.seconds / env.step_dt)
     writers = {}
@@ -230,6 +234,11 @@ def main() -> None:
         jv_other = np.where(open_, np.maximum(jv_other, oth_now), jv_other)
         sub["open"] = torch.as_tensor(result == "", device=env.device)
         best = np.where(open_, np.maximum(best, dx), best)
+        dy_max = np.where(open_, np.maximum(dy_max, np.abs(dy - y0)), dy_max)
+        for i in np.flatnonzero(open_):
+            for o, xo in marks[kinds[i]].items():
+                if np.isnan(dy_at[o][i]) and dx[i] >= xo:
+                    dy_at[o][i] = dy[i] - y0[i]
         d = dones.cpu().numpy().astype(bool)
         tm = env.termination_manager
         blow = tm.get_term("physics_blowup").cpu().numpy() if "physics_blowup" in tm.active_terms else None
@@ -273,7 +282,10 @@ def main() -> None:
              "best_progress_m": round(float(best[i]), 3), "goal_m": round(float(goal[i]), 3),
              "reached": where(kinds[i], best[i]),
              "max_jv_leg": round(float(jv_leg[i]), 1), "max_jv_other": round(float(jv_other[i]), 1),
-             "worst_joint": jv_worst[i], "sub_max_jv_leg": round(float(sub["max"][i]), 1)} for i in range(n)]
+             "worst_joint": jv_worst[i], "sub_max_jv_leg": round(float(sub["max"][i]), 1),
+             "max_dy_cm": round(float(dy_max[i]) * 100, 1),
+             **{f"dy_{o}_cm": ("" if np.isnan(dy_at[o][i]) else round(float(dy_at[o][i]) * 100, 1)) for o in dy_at}}
+            for i in range(n)]
     with open(out / "results.csv", "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         w.writeheader()
@@ -288,6 +300,8 @@ def main() -> None:
         lines.append(f"  {k}: 완주 {ok}/{len(rs)}, 평균 진척 {np.mean([r['best_progress_m'] for r in rs]):.2f} / "
                      f"{rs[0]['goal_m']:.2f} m, 가장 멀리 간 곳 {reach}")
         idx = [i for i in range(n) if kinds[i] == k]
+        dys = "  ".join(f"{o} {np.nanmean(np.abs(dy_at[o][idx])) * 100:.1f}" for o in marks[k])
+        lines.append(f"    옆 위치 |y| 평균 (cm, 장애물 시작선에서): {dys}  최대 {np.mean(dy_max[idx]) * 100:.1f}")
         h = sub["hist"][idx].sum(0).cpu().numpy()
         c = np.cumsum(h) / max(h.sum(), 1)
         pct = lambda q: (np.searchsorted(c, q) + 1) * 0.5  # noqa: E731

@@ -347,6 +347,14 @@ def _exp3l(env, agent):
                 "armature_distribution_params": (0.5, 2.0), "operation": "scale", "distribution": "log_uniform"})
 
 
+def _exp3m(env, agent):
+    """3-m: 3-l 에 옆 쏠림 보상. 3-l 은 튐이 없어졌지만 한쪽(오른쪽)으로 꾸준히 밀려 맵 1 40 회 중 4 번 코스 밖으로 나감
+    (계단 시작선에서 |y| 평균 3-k 5 cm, 3-l 14 cm). 옆 속도 2 초 평균이 0 이 되게 보상.
+    실행: TRAIN_EXTRA="--std_max 0.5 --bound_coef 0.1", 3-l 체크포인트에서 이어서"""
+    _exp3l(env, agent)
+    env.rewards.track_vy_mean = RewTerm(func=mdp.track_vy_mean_exp, weight=1.0, params={"tau": 2.0, "std": 0.02})
+
+
 BASE_YAW_RATE = 0.81   # wasd A 키(wz = 1) 제자리 회전 속도 rad/s. command_eval.py --controller tripod 로 잼 (8대 평균 0.812)
 
 
@@ -371,6 +379,7 @@ EXPERIMENTS = {
     "3j": _exp3j,
     "3k": _exp3k,
     "3l": _exp3l,
+    "3m": _exp3m,
 }
 
 
