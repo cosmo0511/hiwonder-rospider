@@ -28,6 +28,9 @@ from pathlib import Path
 
 from isaaclab.app import AppLauncher
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from obstacle_rl.physics_args import add_physics_args  # noqa: E402
+
 parser = argparse.ArgumentParser(description="RosPider 걸음새 평가")
 parser.add_argument("--controller", choices=["policy", "tripod", "zero"], required=True,
                     help="zero = 행동 0 (CPG 행동 --exp 2f 의 열린 루프 확인용)")
@@ -43,6 +46,7 @@ parser.add_argument("--blind", action="store_true")
 parser.add_argument("--wasd_gains", action="store_true")
 parser.add_argument("--video", action="store_true", help="0 번 로봇을 따라가며 mp4 저장 (--enable_cameras 필요)")
 parser.add_argument("--name", default=None, help="결과 폴더 이름. 기본은 체크포인트 / tripod")
+add_physics_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
 if args.controller == "policy" and not args.checkpoint:
@@ -68,7 +72,7 @@ from obstacle_rl import experiments  # noqa: E402
 from obstacle_rl import mdp as gait_mdp  # noqa: E402
 from obstacle_rl.agents.rsl_rl_ppo_cfg import RoSpiderObstaclePPORunnerCfg  # noqa: E402
 from obstacle_rl.baseline import TripodBaseline  # noqa: E402
-from obstacle_rl.env_cfg import RoSpiderObstacleEnvCfg, make_blind, make_flat, use_tripod_gait, use_wasd_gains  # noqa: E402
+from obstacle_rl.env_cfg import RoSpiderObstacleEnvCfg, make_blind, make_flat, physics_from_args, use_tripod_gait, use_wasd_gains  # noqa: E402
 
 LEGS = ["LF", "LM", "LR", "RF", "RM", "RR"]
 TRIPOD_A = ("LF", "RM", "LR")
@@ -114,6 +118,7 @@ def main() -> None:
             agent_cfg.obs_groups = {"policy": ["policy"], "critic": ["critic"]}
     if args.wasd_gains or args.controller == "tripod":
         use_wasd_gains(env_cfg)
+    physics_from_args(env_cfg, args)
     cmd = env_cfg.commands.base_velocity
     cmd.ranges.lin_vel_x = (args.vx, args.vx)
     cmd.ranges.lin_vel_y = (0.0, 0.0)
@@ -130,6 +135,8 @@ def main() -> None:
     ev.physics_material.params["dynamic_friction_range"] = (args.friction, args.friction)
     if ev.add_base_mass is not None:
         ev.add_base_mass.params["mass_distribution_params"] = (1.54, 1.54)   # 3.2 - 1.66
+    if getattr(ev, "leg_armature", None) is not None:   # 3-l: 로봇마다 armature 다르게 하던 것 끔 (평가는 기본 0.01)
+        ev.leg_armature = None
     if getattr(ev, "real_masses", None) is not None:
         ev.real_masses.params["scale_range"] = (1.0, 1.0)   # 실측 분포 그대로
     ev.reset_base.params["pose_range"] = {"x": (0.0, 0.0), "y": (0.0, 0.0), "yaw": (0.0, 0.0)}

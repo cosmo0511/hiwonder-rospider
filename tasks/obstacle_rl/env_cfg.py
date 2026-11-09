@@ -218,6 +218,30 @@ def make_blind(cfg: RoSpiderObstacleEnvCfg) -> None:
     cfg.observations.policy.height_scan = None
 
 
+def set_physics(cfg: RoSpiderObstacleEnvCfg, vel_iters=None, pos_iters=None, leg_armature=None,
+                leg_vel_limit=None, dt=None) -> None:
+    """물리 설정 덮어쓰기. None 이면 그대로."""
+    rob = cfg.scene.robot
+    if vel_iters is not None:
+        rob.spawn.articulation_props.solver_velocity_iteration_count = vel_iters
+    if pos_iters is not None:
+        rob.spawn.articulation_props.solver_position_iteration_count = pos_iters
+    if leg_armature is not None:
+        rob.actuators["legs"].armature = leg_armature
+    if leg_vel_limit is not None:
+        rob.actuators["legs"].velocity_limit_sim = leg_vel_limit
+    if dt is not None:
+        ctrl = cfg.sim.dt * cfg.decimation
+        cfg.sim.dt = dt
+        cfg.decimation = round(ctrl / dt)
+        cfg.sim.render_interval = cfg.decimation
+        cfg.scene.contact_forces.update_period = dt
+
+
+def physics_from_args(cfg: RoSpiderObstacleEnvCfg, args) -> None:
+    set_physics(cfg, args.vel_iters, args.pos_iters, args.leg_armature, args.leg_vel_limit, args.dt)
+
+
 def use_wasd_gains(cfg: RoSpiderObstacleEnvCfg) -> None:
     """다리 게인을 rospider_wasd.py(실제로 걷는 걸 확인한 값)에 맞춘다.
     그 스크립트는 degree 단위 드라이브: KP 1.0 /deg, KD 0.02 /(deg/s), 최대 토크 2.0 -> rad 단위로 바꾼다.

@@ -20,6 +20,9 @@ from pathlib import Path
 
 from isaaclab.app import AppLauncher
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from obstacle_rl.physics_args import add_physics_args  # noqa: E402
+
 parser = argparse.ArgumentParser(description="RoSpider 실물 코스 평가")
 parser.add_argument("--controller", choices=["policy", "tripod"], required=True)
 parser.add_argument("--checkpoint", default=None)
@@ -41,6 +44,7 @@ parser.add_argument("--stair_tread", type=float, default=None, help="계단 디�
 parser.add_argument("--no_blowup", action="store_true", help="물리 폭발 종료를 끔 (블라인드 / 기존걸음과 같은 조건으로 비교)")
 parser.add_argument("--maps", nargs="+", default=["map1", "map2"],
                     help="course.SEQUENCES 의 타일 종류. 파이프만 / 계단만 따로 보려면 --maps pipes stairs")
+add_physics_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
 
@@ -60,7 +64,7 @@ from obstacle_rl import course, experiments  # noqa: E402
 from obstacle_rl import mdp as obs_mdp  # noqa: E402
 from obstacle_rl.agents.rsl_rl_ppo_cfg import RoSpiderObstaclePPORunnerCfg  # noqa: E402
 from obstacle_rl.baseline import TripodBaseline  # noqa: E402
-from obstacle_rl.env_cfg import use_wasd_gains  # noqa: E402
+from obstacle_rl.env_cfg import physics_from_args, use_wasd_gains  # noqa: E402
 from obstacle_rl.terrain_cfg import REAL_COURSE_TERRAINS_CFG, RoSpiderTileCfg, column_kinds  # noqa: E402
 
 # 계단 치수 바꾸기 (평가 전용). course 함수들은 부를 때 모듈 값을 읽으니 지형을 만들기 전에 바꾸면 된다.
@@ -99,6 +103,8 @@ def main() -> None:
     ev = env_cfg.events
     if ev.add_base_mass is not None:
         ev.add_base_mass.params["mass_distribution_params"] = (1.54, 1.54)
+    if getattr(ev, "leg_armature", None) is not None:   # 3-l: 로봇마다 armature 다르게 하던 것 끔 (평가는 기본 0.01)
+        ev.leg_armature = None
     if getattr(ev, "real_masses", None) is not None:
         ev.real_masses.params["scale_range"] = (1.0, 1.0)
     ev.reset_base.params["pose_range"] = {"x": (-0.02, 0.02), "y": (-0.03, 0.03), "yaw": (-0.03, 0.03)}
@@ -128,6 +134,7 @@ def main() -> None:
         perc.scan.params["blank"] = True
     if args.no_blowup and getattr(env_cfg.terminations, "physics_blowup", None) is not None:
         env_cfg.terminations.physics_blowup = None
+    physics_from_args(env_cfg, args)
     env_cfg.viewer.origin_type = "asset_root"
     env_cfg.viewer.asset_name = "robot"
     env_cfg.viewer.eye = (-0.7, -1.0, 0.6)
@@ -167,6 +174,23 @@ def main() -> None:
     # 관절 속도 최댓값 (실물 다리 서보는 약 6 rad/s). 어느 관절이 튀는지 본다
     jnames = robot.joint_names
     is_leg = torch.tensor([j.split("_")[0] in ("coxa", "femur", "tibla") for j in jnames], device=env.device)
+    leg_ids = torch.nonzero(is_leg).squeeze(-1)
+    print(f"[course_eval] PhysX 다리 최대 관절 속도 {robot.root_physx_view.get_dof_max_velocities()[0, leg_ids[0]].item():.2f}, "
+          f"armature {robot.root_physx_view.get_dof_armatures()[0, leg_ids[0]].item():.4f}, "
+          f"dt {env.physics_dt}, decimation {env_cfg.decimation}", flush=True)
+    # 물리 스텝마다 다리 관절 속도를 본다 (env 스텝 사이에 튀고 가라앉으면 env 스텝 기록엔 안 잡힘)
+    sub = {"hist": torch.zeros(n, 200, device=env.device), "max": torch.zeros(n, device=env.device),
+           "open": torch.ones(n, dtype=torch.bool, device=env.device)}
+    orig_update = robot.update
+
+    def update_and_record(dt):
+        orig_update(dt)
+        v = robot.data.joint_vel[:, leg_ids].abs()
+        b = (v * 2).long().clamp(max=199)   # 0.5 rad/s 칸, 100 rad/s 이상은 마지막 칸
+        sub["hist"] += torch.nn.functional.one_hot(b, 200).sum(1) * sub["open"].unsqueeze(-1)
+        sub["max"] = torch.where(sub["open"], torch.maximum(sub["max"], v.amax(-1)), sub["max"])
+
+    robot.update = update_and_record
     jv_leg = np.zeros(n)
     jv_other = np.zeros(n)
     jv_worst = np.array([""] * n, dtype=object)
@@ -204,6 +228,7 @@ def main() -> None:
             jv_worst[i] = jnames[int(arg_now[i])]
         jv_leg = np.where(open_, np.maximum(jv_leg, leg_now), jv_leg)
         jv_other = np.where(open_, np.maximum(jv_other, oth_now), jv_other)
+        sub["open"] = torch.as_tensor(result == "", device=env.device)
         best = np.where(open_, np.maximum(best, dx), best)
         d = dones.cpu().numpy().astype(bool)
         tm = env.termination_manager
@@ -248,7 +273,7 @@ def main() -> None:
              "best_progress_m": round(float(best[i]), 3), "goal_m": round(float(goal[i]), 3),
              "reached": where(kinds[i], best[i]),
              "max_jv_leg": round(float(jv_leg[i]), 1), "max_jv_other": round(float(jv_other[i]), 1),
-             "worst_joint": jv_worst[i]} for i in range(n)]
+             "worst_joint": jv_worst[i], "sub_max_jv_leg": round(float(sub["max"][i]), 1)} for i in range(n)]
     with open(out / "results.csv", "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         w.writeheader()
@@ -262,6 +287,14 @@ def main() -> None:
             reach[r["reached"]] = reach.get(r["reached"], 0) + 1
         lines.append(f"  {k}: 완주 {ok}/{len(rs)}, 평균 진척 {np.mean([r['best_progress_m'] for r in rs]):.2f} / "
                      f"{rs[0]['goal_m']:.2f} m, 가장 멀리 간 곳 {reach}")
+        idx = [i for i in range(n) if kinds[i] == k]
+        h = sub["hist"][idx].sum(0).cpu().numpy()
+        c = np.cumsum(h) / max(h.sum(), 1)
+        pct = lambda q: (np.searchsorted(c, q) + 1) * 0.5  # noqa: E731
+        lines.append(f"    다리 관절 속도 (물리 스텝, rad/s): 99 % {pct(0.99):.1f}, 99.9 % {pct(0.999):.1f}, "
+                     f"env별 최대 평균 {np.mean([rows[i]['sub_max_jv_leg'] for i in idx]):.1f}, "
+                     f"> 6 rad/s {100 * h[12:].sum() / max(h.sum(), 1):.2f} %, > 12 {100 * h[24:].sum() / max(h.sum(), 1):.3f} %, "
+                     f"> 30 {100 * h[60:].sum() / max(h.sum(), 1):.4f} %")
     if raw_acts:
         ra = np.stack(raw_acts)   # (스텝, env, 4) : 걸음 크기, 걸음 빠르기, 회전, 다리 높이
         for k in sorted(set(kinds)):

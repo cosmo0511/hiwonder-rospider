@@ -100,6 +100,8 @@ def main() -> None:
     ev.physics_material.params["dynamic_friction_range"] = (args.friction, args.friction)
     if ev.add_base_mass is not None:
         ev.add_base_mass.params["mass_distribution_params"] = (1.54, 1.54)
+    if getattr(ev, "leg_armature", None) is not None:   # 3-l: 로봇마다 armature 다르게 하던 것 끔 (평가는 기본 0.01)
+        ev.leg_armature = None
     if getattr(ev, "real_masses", None) is not None:
         ev.real_masses.params["scale_range"] = (1.0, 1.0)
     ev.reset_base.params["pose_range"] = {"x": (0.0, 0.0), "y": (0.0, 0.0), "yaw": (0.0, 0.0)}

@@ -14,9 +14,11 @@ from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
+from isaaclab.managers import SceneEntityCfg
 
 from . import mdp
 from .cpg_action import TripodCPGActionCfg
+from .robot_cfg import LEG_JOINTS
 from .env_cfg import make_blind, make_flat, use_real_masses, use_tripod_gait, use_wasd_gains
 
 
@@ -331,6 +333,20 @@ def _exp3k(env, agent):
     env.scene.terrain.terrain_generator.sub_terrains["flat"].proportion = 0.30
 
 
+def _exp3l(env, agent):
+    """3-l: 3-k 에 다리 관절 armature (서보 기어 관성). 지금까지 armature 0 이라 착지 순간 정강이가 한 물리 스텝 동안
+    60 ~ 90 rad/s 로 튐 (PhysX 속도 제한 6 rad/s 를 넘김. 실물 HX-35H 는 0.18 s/60° = 약 5.8 rad/s).
+    평가에서 armature 0.01 이면 튐이 사라지고 (최대 6.0 rad/s) 발 미끄러짐도 17 -> 8 cm/s 로 줄었다.
+    대신 armature 없이 배운 3-k 는 옆으로 더 샘 (2 -> 6 cm) -> armature 를 넣고 이어서 학습.
+    실물 값은 모르니 0.01 기준 0.5 ~ 2배 (0.005 ~ 0.02) 로 로봇마다 다르게."""
+    _exp3k(env, agent)
+    env.scene.robot.actuators["legs"].armature = 0.01
+    env.events.leg_armature = EventTerm(
+        func=loco_mdp.randomize_joint_parameters, mode="startup",
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=LEG_JOINTS),
+                "armature_distribution_params": (0.5, 2.0), "operation": "scale", "distribution": "log_uniform"})
+
+
 BASE_YAW_RATE = 0.81   # wasd A 키(wz = 1) 제자리 회전 속도 rad/s. command_eval.py --controller tripod 로 잼 (8대 평균 0.812)
 
 
@@ -354,6 +370,7 @@ EXPERIMENTS = {
     "3i": _exp3i,
     "3j": _exp3j,
     "3k": _exp3k,
+    "3l": _exp3l,
 }
 
 
