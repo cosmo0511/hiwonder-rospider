@@ -8,6 +8,8 @@
 - 걸음 빠르기: 1.2 Hz x (1 + 0.3 a1)
 - 좌우 회전: 왼쪽 coxa 스윙 x (1 + 0.25 a2), 오른쪽 x (1 - 0.25 a2)
 - 관절 보정: 0.2 rad x a (장애물 앞에서 다리를 더 들거나 딛는 자리를 바꿀 여지)
+- use_yaw 면 명령 회전 속도(wz)도 wasd A / D 키처럼 넣는다: 왼쪽 크기 - yaw, 오른쪽 + yaw (제자리 회전 가능).
+  명령이 거의 0 이면 wasd 처럼 다리를 안 들고 선다 (act = 명령 크기 / stand_gate, 0 ~ 1)
 관절 목표 = 저역통과(wasd tripod 궤적(박자, 크기, 회전)) + 보정. 행동이 0 이면 rospider_wasd.py 걸음과 같다
 (wasd 처럼 0 중심 절대각, 60 Hz 에서 프레임당 0.25 따라가는 필터를 이 제어 주기로 환산). 박자는 env._gait_phase 에 둔다.
 **Kit 이 뜬 뒤에 import.**
@@ -39,6 +41,7 @@ class TripodCPGAction(ActionTerm):
         self._dt = env.step_dt
         self._alpha = 1.0 - (1.0 - 0.25) ** (60.0 * self._dt)            # wasd SMOOTH 0.25 @ 60 Hz
         env._gait_phase = self._start_phase(self.num_envs)
+        env._gait_act = torch.ones(self.num_envs, device=self.device)
         self._is_left = torch.tensor([leg[0] == "L" for leg in gait_mdp.LEGS], device=self.device)
         self._is_a = torch.tensor([leg in gait_mdp.TRIPOD_A for leg in gait_mdp.LEGS], device=self.device)
         self._side = torch.tensor([gait_mdp.SIDE_SIGN[leg[0]] for leg in gait_mdp.LEGS], device=self.device)
@@ -66,6 +69,13 @@ class TripodCPGAction(ActionTerm):
         hz = gait_mdp.GAIT_HZ * ((fmin + fmax) / 2 + (fmax - fmin) / 2 * a[:, 1])
         turn = self.cfg.turn_range * a[:, 2]
         k_lift = (1.0 + self.cfg.lift_range * a[:, 3]).unsqueeze(-1) if self.cfg.use_lift else 1.0
+        if self.cfg.use_yaw:
+            yaw = (cmd[:, 2] / self.cfg.base_yaw_rate).clamp(-1.0, 1.0)
+            act = ((base_amp + yaw.abs()) / self.cfg.stand_gate).clamp(0.0, 1.0)
+        else:
+            yaw = torch.zeros_like(amp)
+            act = torch.ones_like(amp)
+        env._gait_act = act
         res = a[:, 3 + int(self.cfg.use_lift):]
         env._gait_phase = (env._gait_phase + hz * self._dt) % 1.0
 
@@ -76,9 +86,11 @@ class TripodCPGAction(ActionTerm):
         frac = torch.where(swing, -torch.cos(math.pi * u), torch.cos(math.pi * u))
         lift = torch.where(swing, torch.sin(math.pi * u), torch.zeros_like(u))
         side_k = torch.where(self._is_left, 1.0 + turn.unsqueeze(-1), 1.0 - turn.unsqueeze(-1))
-        coxa = self._side * gait_mdp.COXA_AMP * amp.unsqueeze(-1) * side_k * frac
-        femur = gait_mdp.FEMUR_LIFT * lift * k_lift
-        tibla = gait_mdp.TIBIA_LIFT * lift * k_lift
+        # wasd: 왼쪽 크기 vx - wz, 오른쪽 vx + wz
+        side_amp = (amp.unsqueeze(-1) * side_k + torch.where(self._is_left, -1.0, 1.0) * yaw.unsqueeze(-1)).clamp(-2.0, 2.0)   # 직진만일 때는 안 걸림 (최대 1.2 x 1.3 x 1.25)
+        coxa = self._side * gait_mdp.COXA_AMP * side_amp * frac
+        femur = gait_mdp.FEMUR_LIFT * lift * k_lift * act.unsqueeze(-1)
+        tibla = gait_mdp.TIBIA_LIFT * lift * k_lift * act.unsqueeze(-1)
         gait = torch.stack([coxa, femur, tibla], dim=-1).reshape(self.num_envs, 18)
         self._q += self._alpha * (gait - self._q)
         self._targets[:] = self._q + self.cfg.residual_scale * res
@@ -112,3 +124,9 @@ class TripodCPGActionCfg(ActionTermCfg):
     use_lift: bool = False
     """True 면 행동 하나를 더 받아 다리 드는 높이(femur / tibla 들기) 를 x (1 + lift_range a) 로 조절."""
     lift_range: float = 0.5
+    use_yaw: bool = False
+    """True 면 명령 wz 를 wasd A / D 처럼 좌우 반대 스윙으로 넣고, 명령이 0 근처면 선다 (3-k 정지 · 회전)."""
+    base_yaw_rate: float = 0.5
+    """wasd A 키(wz = 1) 가 평지에서 내는 회전 속도 [rad/s]. command_eval.py --controller tripod 로 잰다."""
+    stand_gate: float = 0.3
+    """(전진 크기 + |yaw|) 가 이 값보다 작으면 다리 드는 높이를 비례해서 줄임. 0.3 = 0.054 m/s. 직진 명령(0.14 이상)은 영향 없음."""

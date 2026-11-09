@@ -115,6 +115,7 @@ def main() -> None:
     cmd.heading_command = True
     cmd.rel_standing_envs = 0.0
     cmd.debug_vis = False
+    obs_mdp.straight_only(cmd)   # 3-k 처럼 정지 · 회전을 섞은 명령이면 직진만
     env_cfg.observations.policy.enable_corruption = False
     env_cfg.episode_length_s = args.seconds + 5.0
     env_cfg.terminations.base_contact = None    # 계단에서 몸통이 스쳐도 계속 가게 둔다 (뒤집힘만 실패)

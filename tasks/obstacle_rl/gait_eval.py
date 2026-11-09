@@ -121,6 +121,7 @@ def main() -> None:
     cmd.heading_command = True
     cmd.rel_standing_envs = 0.0
     cmd.debug_vis = False
+    gait_mdp.straight_only(cmd)   # 3-k 처럼 정지 · 회전을 섞은 명령이면 직진만
     env_cfg.observations.policy.enable_corruption = False
     ev = env_cfg.events
     ev.push_robot = None

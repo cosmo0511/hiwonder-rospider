@@ -312,6 +312,28 @@ def _exp3j(env, agent):
             sub.height_scale_range = (0.5, 1.5)
 
 
+def _exp3k(env, agent):
+    """3-k: 3-j 에 정지 · 회전 명령. 지금까지는 직진(0.14 ~ 0.20 m/s)만 배워서 도착 뒤에도 멈추지 않고, 실물에서 조종할 수 없다.
+    - CPG: 명령 wz 를 wasd A / D 키처럼 좌우 반대 스윙으로 (제자리 회전), 명령이 0 근처면 다리를 안 들고 선다 (cpg_action use_yaw)
+    - 명령 (mdp.MixedVelocityCommand): 평지 타일은 직진 25 % / 걸으며 돌기 20 % / 제자리 돌기 30 % / 정지 25 %,
+      코스 타일은 10 % 정지 (계단 · 파이프 위에서도 서기). 4 ~ 8 초마다 다시 뽑음
+    - 평지 타일 비율 0.08 -> 0.30 (명령 연습 자리)
+    - 정지 중에는 여섯 발 모두 디딜 차례로 (stance_air / stance_slip / tripod_contact 가 서 있기를 보상)
+    관측 · 행동 크기는 3-j 와 같아서 그대로 이어 받는다.
+    실행: TRAIN_EXTRA="--std_max 0.5 --bound_coef 0.1" run_exp.sh 3k <iters> 0.18 <3-j 체크포인트>"""
+    _exp3j(env, agent)
+    env.actions.cpg.use_yaw = True
+    env.actions.cpg.base_yaw_rate = BASE_YAW_RATE
+    cmd = mdp.use_mixed_commands(env.commands.base_velocity)
+    cmd.resampling_time_range = (4.0, 8.0)
+    cmd.ranges.ang_vel_z = (-0.5, 0.5)
+    env.commands.base_velocity = cmd
+    env.scene.terrain.terrain_generator.sub_terrains["flat"].proportion = 0.30
+
+
+BASE_YAW_RATE = 0.81   # wasd A 키(wz = 1) 제자리 회전 속도 rad/s. command_eval.py --controller tripod 로 잼 (8대 평균 0.812)
+
+
 EXPERIMENTS = {
     "1": _exp1,
     "2b": _exp2b,
@@ -331,6 +353,7 @@ EXPERIMENTS = {
     "3h": _exp3h,
     "3i": _exp3i,
     "3j": _exp3j,
+    "3k": _exp3k,
 }
 
 

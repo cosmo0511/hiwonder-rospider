@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import copy
 import math
 from typing import TYPE_CHECKING
 
@@ -150,7 +151,10 @@ def _phase(env: "ManagerBasedRLEnv") -> torch.Tensor:
 def _stance_wanted(env: "ManagerBasedRLEnv") -> torch.Tensor:
     """(env, 6) 이 박자에 땅에 있어야 하는 발."""
     a_swing = (_phase(env) < 0.5).unsqueeze(-1)
-    return torch.where(_gait_ids(env)["group_a"], ~a_swing, a_swing)
+    want = torch.where(_gait_ids(env)["group_a"], ~a_swing, a_swing)
+    if hasattr(env, "_gait_act"):   # 정지 명령으로 서 있으면 (cpg_action use_yaw) 여섯 발 모두 디딤
+        want = want | (env._gait_act < 0.5).unsqueeze(-1)
+    return want
 
 
 def _feet(env: "ManagerBasedRLEnv"):
@@ -529,3 +533,119 @@ def pipe_states(env: "ManagerBasedRLEnv") -> torch.Tensor:
         else:
             out += [torch.zeros(env.num_envs, device=env.device)] * 3
     return torch.stack(out, dim=-1).clamp(-3.0, 3.0)
+
+
+# ---------------------------------------------------------------- 3-k: 정지 · 회전 명령
+from isaaclab.envs.mdp import UniformVelocityCommand, UniformVelocityCommandCfg  # noqa: E402
+from isaaclab.utils import configclass  # noqa: E402
+
+STRAIGHT, WALK_TURN, TURN, STOP = 0, 1, 2, 3
+
+
+class MixedVelocityCommand(UniformVelocityCommand):
+    """직진만 하던 명령에 정지 · 회전을 섞는다. 실물에서 조종하려면 서기 / 돌기 / 걸으며 돌기가 필요하다.
+
+    - 평지 타일(free_kinds): 직진 / 걸으며 돌기 / 제자리 돌기 / 정지 를 free_probs 비율로
+    - 코스 타일: course_stop 확률로 정지, 나머지는 지금처럼 직진 (계단 · 파이프 위에서도 서 있게)
+    방향 목표(heading_target)는 정책 관측(방향 오차)과 벌점에 쓰이므로 모드마다 맞춰 둔다:
+    직진은 지금 방향 기준 ±heading, 돌기는 wz 를 적분 (몸과 max_heading_lag 이상 벌어지지 않게), 정지는 그 자리 방향.
+    실물에서는 IMU 요 적분으로 같은 값을 만든다."""
+
+    cfg: "MixedVelocityCommandCfg"
+
+    def __init__(self, cfg, env):
+        super().__init__(cfg, env)
+        self.mode = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self._free = None
+
+    def _free_mask(self) -> torch.Tensor:
+        if self._free is None:
+            if self._env.scene.terrain.cfg.terrain_generator is None:   # 평지(plane): 전부 평지 타일
+                self._free = torch.ones(self.num_envs, dtype=torch.bool, device=self.device)
+            else:
+                kinds = _env_kinds(self._env, torch.arange(self.num_envs, device=self.device))
+                self._free = torch.tensor([k in self.cfg.free_kinds for k in kinds], device=self.device)
+        return self._free
+
+    def _resample_command(self, env_ids):
+        super()._resample_command(env_ids)
+        env_ids = torch.as_tensor(env_ids, device=self.device, dtype=torch.long)
+        n = len(env_ids)
+        if n == 0:
+            return
+        free = self._free_mask()[env_ids]
+        u = torch.rand(n, device=self.device)
+        cum = torch.tensor(self.cfg.free_probs, device=self.device).cumsum(0)
+        mode_free = (u.unsqueeze(-1) > cum[:-1]).sum(-1)
+        mode_course = torch.where(u < self.cfg.course_stop, STOP, STRAIGHT)
+        mode = torch.where(free, mode_free, mode_course)
+        self.mode[env_ids] = mode
+
+        h = self.robot.data.heading_w[env_ids]
+        rel = torch.empty(n, device=self.device).uniform_(*self.cfg.ranges.heading)
+        tgt = torch.where(free & (mode == STRAIGHT), h + rel, self.heading_target[env_ids])
+        tgt = torch.where(mode != STRAIGHT, h, tgt)
+        self.heading_target[env_ids] = math_utils.wrap_to_pi(tgt)
+
+        sign = torch.where(torch.rand(n, device=self.device) < 0.5, -1.0, 1.0)
+        wz_walk = torch.empty(n, device=self.device).uniform_(*self.cfg.wz_walk) * sign
+        wz_turn = torch.empty(n, device=self.device).uniform_(*self.cfg.wz_turn) * sign
+        cmd = self.vel_command_b[env_ids]
+        cmd[:, 2] = torch.where(mode == WALK_TURN, wz_walk, torch.where(mode == TURN, wz_turn, cmd[:, 2]))
+        cmd[:, 0] = torch.where(mode == TURN, 0.0, cmd[:, 0])
+        cmd[:, 1] = torch.where(mode == STRAIGHT, cmd[:, 1], 0.0)
+        self.vel_command_b[env_ids] = cmd
+        self.is_heading_env[env_ids] = mode == STRAIGHT
+        self.is_standing_env[env_ids] = mode == STOP
+
+    def _update_command(self):
+        super()._update_command()   # 직진: 방향 P 제어로 wz, 정지: 0
+        ids = ((self.mode == WALK_TURN) | (self.mode == TURN)).nonzero(as_tuple=False).flatten()
+        if len(ids) == 0:
+            return
+        h = self.robot.data.heading_w[ids]
+        tgt = self.heading_target[ids] + self.vel_command_b[ids, 2] * self._env.step_dt
+        lag = math_utils.wrap_to_pi(tgt - h).clamp(-self.cfg.max_heading_lag, self.cfg.max_heading_lag)
+        self.heading_target[ids] = math_utils.wrap_to_pi(h + lag)
+
+    def set_fixed(self, mode: int, vx: float, wz: float):
+        """평가용: 모든 env 를 한 모드로 고정 (command_eval.py). 자동 재추첨은 time_left 로 막는다."""
+        self.time_left[:] = 1.0e9
+        self.mode[:] = mode
+        h = self.robot.data.heading_w
+        self.heading_target[:] = h
+        self.vel_command_b[:, 0] = vx
+        self.vel_command_b[:, 1] = 0.0
+        self.vel_command_b[:, 2] = wz
+        self.is_heading_env[:] = mode == STRAIGHT
+        self.is_standing_env[:] = mode == STOP
+
+
+@configclass
+class MixedVelocityCommandCfg(UniformVelocityCommandCfg):
+    class_type: type = MixedVelocityCommand
+    free_kinds: tuple = ("flat",)
+    free_probs: tuple = (0.25, 0.2, 0.3, 0.25)
+    """평지 타일 모드 비율: 직진, 걸으며 돌기, 제자리 돌기, 정지"""
+    course_stop: float = 0.1
+    wz_walk: tuple = (0.1, 0.3)
+    wz_turn: tuple = (0.15, 0.5)
+    max_heading_lag: float = 0.5
+
+
+def use_mixed_commands(cmd_cfg: UniformVelocityCommandCfg) -> MixedVelocityCommandCfg:
+    """기존 명령 설정을 그대로 옮긴 MixedVelocityCommandCfg."""
+    import dataclasses  # noqa: PLC0415
+
+    new = MixedVelocityCommandCfg()
+    for f in dataclasses.fields(cmd_cfg):
+        if f.name != "class_type":
+            setattr(new, f.name, copy.deepcopy(getattr(cmd_cfg, f.name)))
+    return new
+
+
+def straight_only(cmd_cfg) -> None:
+    """평가(gait_eval / course_eval): 섞은 명령이면 직진만 남긴다."""
+    if isinstance(cmd_cfg, MixedVelocityCommandCfg):
+        cmd_cfg.free_probs = (1.0, 0.0, 0.0, 0.0)
+        cmd_cfg.course_stop = 0.0
