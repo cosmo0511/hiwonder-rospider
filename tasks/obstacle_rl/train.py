@@ -32,6 +32,15 @@ parser.add_argument("--seed", type=int, default=42)
 parser.add_argument("--height_curriculum", action="store_true",
                     help="난이도(행)에 따라 높이를 0.5 배 -> 1 배로. 기본은 실물 높이 고정")
 parser.add_argument("--resume", type=str, default=None, help="이어 학습할 체크포인트 (.pt)")
+parser.add_argument("--std_reset", type=float, default=None, help="이어 받은 뒤 행동 잡음 std 를 이 값으로 (3-e 까지 std 가 10 넘게 커짐)")
+parser.add_argument("--std_max", type=float, default=None, help="매 업데이트 뒤 행동 잡음 std 상한")
+parser.add_argument("--bound_coef", type=float, default=0.0, help="정책 평균이 ±1 밖으로 나간 만큼 끌어당기는 계수 (0 이면 끔)")
+parser.add_argument("--exp", default=None, help="experiments.py 의 실험 이름 (예: 2c). 주면 --flat/--gait/--blind/--wasd_gains 는 무시")
+parser.add_argument("--flat", action="store_true", help="평지에서 보행만 (1단계). 장애물 학습은 이 체크포인트를 --resume")
+parser.add_argument("--gait", action="store_true", help="wasd tripod 걸음 모방 + 박자 관측 (1단계)")
+parser.add_argument("--blind", action="store_true",
+                    help="정책은 IMU + 관절만 본다. 몸 선속도, 높이 스캔은 critic 만 (실기에 없는 값)")
+parser.add_argument("--wasd_gains", action="store_true", help="다리 게인을 rospider_wasd.py 값으로 (57.3 / 1.15 / 2.0)")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
 
@@ -48,8 +57,9 @@ from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tasks"))
+from obstacle_rl import experiments  # noqa: E402
 from obstacle_rl.agents.rsl_rl_ppo_cfg import RoSpiderObstaclePPORunnerCfg  # noqa: E402
-from obstacle_rl.env_cfg import RoSpiderObstacleEnvCfg  # noqa: E402
+from obstacle_rl.env_cfg import RoSpiderObstacleEnvCfg, make_blind, make_flat, use_tripod_gait, use_wasd_gains  # noqa: E402
 from obstacle_rl.terrain_cfg import enable_height_curriculum  # noqa: E402
 
 
@@ -59,28 +69,136 @@ def main() -> None:
     env_cfg.seed = args.seed
     if args.device:
         env_cfg.sim.device = args.device
-    if args.height_curriculum:
-        enable_height_curriculum(env_cfg.scene.terrain.terrain_generator)
-
     agent_cfg = RoSpiderObstaclePPORunnerCfg()
     agent_cfg.seed = args.seed
     agent_cfg.device = env_cfg.sim.device
     if args.max_iterations is not None:
         agent_cfg.max_iterations = args.max_iterations
+    if args.exp:
+        experiments.apply(args.exp, env_cfg, agent_cfg)
+    else:
+        if args.flat:
+            make_flat(env_cfg)
+        elif args.height_curriculum:
+            enable_height_curriculum(env_cfg.scene.terrain.terrain_generator)
+        if args.gait:
+            use_tripod_gait(env_cfg)   # make_blind 보다 먼저 (critic 에도 박자)
+        if args.blind:
+            make_blind(env_cfg)
+            agent_cfg.obs_groups = {"policy": ["policy"], "critic": ["critic"]}
+        if args.wasd_gains:
+            use_wasd_gains(env_cfg)
 
-    log_dir = REPO / "logs" / "rsl_rl" / agent_cfg.experiment_name / datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    log_dir = REPO / "logs" / "rsl_rl" / agent_cfg.experiment_name / (datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        + (f"_exp{args.exp}" if args.exp else "".join(f"_{k}" for k in ("flat", "gait", "blind", "wasd_gains") if getattr(args, k))))
     log_dir.mkdir(parents=True, exist_ok=True)
     dump_yaml(str(log_dir / "params" / "env.yaml"), env_cfg)
     dump_yaml(str(log_dir / "params" / "agent.yaml"), agent_cfg)
     print(f"[train] 로그: {log_dir}")
-    print(f"[train] env {args.num_envs}개, 높이 {'커리큘럼 0.5 -> 1.0' if args.height_curriculum else '실물 고정'}")
+    if args.exp:
+        print(f"[train] env {args.num_envs}개, 실험 {args.exp}: {experiments.EXPERIMENTS[args.exp].__doc__.strip()}")
+    else:
+        terrain = "평지" if args.flat else ("커리큘럼 0.5 -> 1.0" if args.height_curriculum else "실물 고정")
+        print(f"[train] env {args.num_envs}개, 지형 {terrain}, gait={args.gait}, blind={args.blind}, wasd_gains={args.wasd_gains}")
 
     env = ManagerBasedRLEnv(cfg=env_cfg)
+    # 물리 폭발이 한 스텝이라도 생기면 점수가 수백만으로 튀어 critic 이 발산한다 (3-c 4303 회). 한 스텝 점수를 묶어 둔다.
+    # 정상 한 스텝 점수는 0.1 안팎, 목표 도착 보너스만 2.0.
+    _compute = env.reward_manager.compute
+    env.reward_manager.compute = lambda dt: torch.nan_to_num(_compute(dt), nan=0.0, posinf=3.0, neginf=-3.0).clamp_(-3.0, 3.0)
+    # 3-c 4407 회: 점수를 묶어도 critic 손실이 매 회 1000 배씩 커짐 -> 관측 어딘가가 비정상. 어느 항목인지 기록하고 ±100 으로 자른다 (관절 속도는 착지 때 40 rad/s 까지 정상).
+    om = env.observation_manager
+    _cg = om.compute_group
+    _warned = {}
+
+    def _checked_group(group_name, update_history=False):
+        out = _cg(group_name, update_history=update_history)
+        if not isinstance(out, torch.Tensor):
+            return out
+        bad = ~torch.isfinite(out) | (out.abs() > 100.0)
+        if bad.any():
+            i0 = 0
+            for name, dim in zip(om.active_terms[group_name], om.group_obs_term_dim[group_name]):
+                n = int(torch.tensor(dim).prod())
+                b = bad[:, i0:i0 + n]
+                if b.any() and _warned.get((group_name, name), 0) < 20:
+                    _warned[(group_name, name)] = _warned.get((group_name, name), 0) + 1
+                    v = out[:, i0:i0 + n][b]
+                    print(f"[obs_guard] {group_name}/{name}: env {int(b.any(dim=1).sum())}개, 값 예 {v[:4].tolist()}", flush=True)
+                i0 += n
+            out = torch.nan_to_num(out, nan=0.0, posinf=100.0, neginf=-100.0).clamp_(-100.0, 100.0)
+        return out
+
+    om.compute_group = _checked_group
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
     runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=str(log_dir), device=agent_cfg.device)
     if args.resume:
         print(f"[train] 이어서: {args.resume}")
-        runner.load(args.resume)
+        # expand_ckpt.py 로 입력을 늘린 체크포인트는 옵티마이저 상태가 없다 -> 새로 시작
+        has_opt = "optimizer_state_dict" in torch.load(args.resume, map_location="cpu", weights_only=False)
+        runner.load(args.resume, load_optimizer=has_opt)
+    # 행동은 ±1 로 잘리는데 잡음 std 에는 상한이 없어서, 엔트로피 보너스가 std 를 키움 (3-c 1 -> 3-e 10 ~ 15).
+    # 그러면 학습 때는 거의 ±1 무작위 행동이고 평가(평균 행동)와 딴판이 된다
+    std_param = runner.alg.policy.std
+    if args.std_reset is not None:
+        with torch.no_grad():
+            std_param.fill_(args.std_reset)
+        print(f"[train] 행동 잡음 std -> {args.std_reset}")
+    if args.std_max is not None:
+        _update = runner.alg.update
+
+        def _update_clamped(*a, **k):
+            out = _update(*a, **k)
+            with torch.no_grad():
+                std_param.clamp_(max=args.std_max)
+            return out
+
+        runner.alg.update = _update_clamped
+    # 행동이 ±1 로 잘리니 정책 평균이 ±1 밖으로 나가면 샘플이 전부 같은 값으로 잘려 그 차원은 기울기가 0 이 된다
+    # (3-f 평지: 주기 -38, 회전 +31 에 고정). rl_games 의 bounds_loss 처럼 ±1 밖으로 나간 만큼만 평균을 끌어당긴다.
+    # 앞 계산은 그대로라 (잘린) 평균 행동은 안 바뀌고, 역전파에만 coef * d/dmu (relu(|mu|-1)^2) 를 더한다
+    if args.bound_coef > 0:
+        from torch.distributions import Normal
+
+        coef = args.bound_coef
+
+        class _BoundGrad(torch.autograd.Function):
+            @staticmethod
+            def forward(ctx, mu):
+                ctx.save_for_backward(mu)
+                return mu.view_as(mu)
+
+            @staticmethod
+            def backward(ctx, g):
+                (mu,) = ctx.saved_tensors
+                excess = torch.relu(mu - 1.0) - torch.relu(-1.0 - mu)
+                return g + coef * 2.0 * excess / mu.shape[0]
+
+        policy = runner.alg.policy
+        _upd_dist = policy.update_distribution
+
+        def _upd_dist_bounded(obs):
+            _upd_dist(obs)
+            d = policy.distribution
+            if torch.is_grad_enabled():
+                policy.distribution = Normal(_BoundGrad.apply(d.mean), d.stddev)
+
+        policy.update_distribution = _upd_dist_bounded
+        _update_b = runner.alg.update
+        n_upd = [0]
+
+        def _update_logged(*a, **k):
+            out = _update_b(*a, **k)
+            n_upd[0] += 1
+            if n_upd[0] % 50 == 1:
+                mu = policy.distribution.mean.detach()
+                over = (mu.abs() - 1.0).clamp(min=0.0)
+                print(f"[bound] 평균 행동 ±1 밖 비율 {float((over > 0).float().mean()):.3f}, "
+                      f"넘친 양 평균 {float(over.mean()):.3f}, 앞 4개 |평균| {mu[:, :4].abs().mean(0).tolist()}", flush=True)
+            return out
+
+        runner.alg.update = _update_logged
+        print(f"[train] 행동 범위 밖 평균 끌어당기기 coef {coef}")
     runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
     env.close()
 
