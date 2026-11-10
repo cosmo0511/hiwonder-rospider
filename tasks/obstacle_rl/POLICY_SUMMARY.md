@@ -25,22 +25,18 @@
 
 <table>
 <tr>
-<th width="25%">기존 걸음: 계단에서 뒤집힘</th>
-<th width="25%">계단 안 배운 블라인드 (3-a): 계단 앞 제자리걸음</th>
-<th width="25%">땅 보는 정책 (3-f): 작업대까지</th>
-<th width="25%">블라인드 (3-i): 작업대까지</th>
+<th width="50%">기존 걸음: 계단에서 뒤집힘</th>
+<th width="50%">계단 안 배운 블라인드 (3-a): 계단 앞 제자리걸음</th>
 </tr>
 <tr>
 <td><img src="media/course_stairs_tripod.gif" width="100%"></td>
 <td><img src="media/course_stairs_blind.gif" width="100%"></td>
-<td><img src="media/course_stairs_perceptive.gif" width="100%"></td>
-<td><img src="media/course_stairs_blind3i.gif" width="100%"></td>
 </tr>
 </table>
 
-맵 1 전체 (구덩이 → 굴러가는 파이프 → 계단 4단 → 작업대, 3-i). 영상은 2배속이다.
+맵 1 전체 (구덩이 → 굴러가는 파이프 → 계단 4단 → 작업대, 최종 3-m). 영상은 2배속이다.
 
-<img src="media/course_map1_blind3i.gif" width="60%">
+<img src="media/course_map1_blind3m.gif" width="60%">
 
 **남은 문제**
 1. **평지에서 명령보다 느리다.** 명령 0.18 m/s에 0.147 m/s (3-k 0.169). 옆 쏠림을 잡으면서 느려졌다.
@@ -124,8 +120,8 @@ CPG + RL (통과)            방지턱·구덩이 통과            땅 봄: 맵
 <th width="33%">실험 2-f (CPG + RL)</th>
 </tr>
 <tr>
-<td><img src="media/baseline_tripod.gif" width="100%"></td>
-<td><img src="media/exp1_speed_only.gif" width="100%"></td>
+<td></td>
+<td></td>
 <td><img src="media/exp2f_cpg_rl.gif" width="100%"></td>
 </tr>
 <tr>
@@ -167,8 +163,6 @@ CPG가 걸음 모양을 보장하니 정책은 "똑바로, 정해진 속도로"�
 - 기존 걸음은 구덩이 바닥에서 앞발이 턱에 걸려 제자리걸음을 한다. 정책은 다리를 더 들어 빠져나온다.
 - 약점: 학습 범위 밖 높이(12 cm)에서는 기존 걸음보다 못하다.
 - 평지 걸음은 유지된다: 0.177 m/s, tripod 74 %, 발 7.2 cm.
-
-<img src="media/exp3a_stage2_flat.gif" width="40%">
 
 ## 3단계: 실물 코스
 
@@ -319,10 +313,6 @@ CPG가 걸음 모양을 보장하니 정책은 "똑바로, 정해진 속도로"�
 - 외우기 시험 (각 30회, 맵 1 / 맵 2 / 계단만): 출발 바꾸기 30 / 30 / 30, 속도 0.12 m/s 30 / 29 / 30, 0.15 m/s 30 / 28 / 30, 0.20 m/s 30 / 30 / 30.
   3-i가 약했던 맵 2 / 0.12 m/s도 23 → 29/30. 360번 중 3번 실패, 3번 모두 맵 2.
 
-<img src="media/course_stairs8cm_blind3j.gif" width="40%">
-
-단 8 cm 계단 (실물보다 2 cm 높음). 2배속.
-
 ### 정지 · 회전 명령 (3-k)
 
 - 3-j까지는 직진 명령(0.14 ~ 0.20 m/s)만 배워서 작업대에 도착해도 계속 걸었다. 실물을 조종하려면 멈추기와 돌기가 필요하다.
@@ -414,10 +404,6 @@ CPG가 걸음 모양을 보장하니 정책은 "똑바로, 정해진 속도로"�
 - 평지 15초 직진에서는 아직 오른쪽으로 1 cm/s씩 샌다. 코스에서는 장애물을 지나며 바로잡힌다.
 - 같은 설정으로 1500회 더 학습해 봤는데 평지 43 cm 샘, 8 cm 16/20으로 나빠져서 1500회째(`2026-11-10_05-05-18_exp3m/model_16096.pt`)를 최종으로 했다.
 
-<img src="media/course_map1_blind3m.gif" width="60%">
-
-맵 1 (3-m). 2배속.
-
 ## 문제와 고친 것
 
 | 문제 | 증상 | 원인 | 고친 것 |
@@ -461,4 +447,5 @@ CPG가 걸음 모양을 보장하니 정책은 "똑바로, 정해진 속도로"�
 ## 영상 위치
 
 - 쉬운 이름 모음: `~/Rospider_RL/` (1_평지걸음, 2_실물코스, 3_로봇1마리_파이프·계단 따로, 4_땅보는 강화학습 고쳐서 다시, 5_땅 못보는 강화학습 계단까지, 6_땅 못보는 강화학습 출력 범위 고친 뒤, 7_땅 못보는 강화학습 높은 계단까지, 8_멈추기·돌기 명령 배운 뒤, 9_관절 속도 튐 잡은 뒤 (최종)). 각 폴더에 `읽어보기.txt` 설명이 있다.
+- 레포에는 대표 GIF만 넣었다. 단계별 전체 영상은 학습한 노트북의 `~/Rospider_RL/`에 있다.
 - 원본: `outputs/obstacle_rl/gait_eval/<실험>/`, `outputs/obstacle_rl/course_eval/<실험>/`
