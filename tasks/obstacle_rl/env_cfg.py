@@ -219,7 +219,7 @@ def make_blind(cfg: RoSpiderObstacleEnvCfg) -> None:
 
 
 def set_physics(cfg: RoSpiderObstacleEnvCfg, vel_iters=None, pos_iters=None, leg_armature=None,
-                leg_vel_limit=None, dt=None) -> None:
+                leg_vel_limit=None, dt=None, ctrl_hz=None) -> None:
     """물리 설정 덮어쓰기. None 이면 그대로."""
     rob = cfg.scene.robot
     if vel_iters is not None:
@@ -236,10 +236,14 @@ def set_physics(cfg: RoSpiderObstacleEnvCfg, vel_iters=None, pos_iters=None, leg
         cfg.decimation = round(ctrl / dt)
         cfg.sim.render_interval = cfg.decimation
         cfg.scene.contact_forces.update_period = dt
+    if ctrl_hz is not None:   # 실물 서보 버스 주기에 맞춤. 물리 dt 는 그대로, 몇 스텝에 한 번 행동하는지만 바꿈
+        cfg.decimation = max(1, round(1.0 / (cfg.sim.dt * ctrl_hz)))
+        cfg.sim.render_interval = cfg.decimation
 
 
 def physics_from_args(cfg: RoSpiderObstacleEnvCfg, args) -> None:
-    set_physics(cfg, args.vel_iters, args.pos_iters, args.leg_armature, args.leg_vel_limit, args.dt)
+    set_physics(cfg, args.vel_iters, args.pos_iters, args.leg_armature, args.leg_vel_limit, args.dt,
+                getattr(args, "ctrl_hz", None))
 
 
 def use_wasd_gains(cfg: RoSpiderObstacleEnvCfg) -> None:

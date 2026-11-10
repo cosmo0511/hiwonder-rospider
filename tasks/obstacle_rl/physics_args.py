@@ -9,3 +9,5 @@ def add_physics_args(parser) -> None:
     parser.add_argument("--leg_armature", type=float, default=None, help="물리: 다리 관절 armature [kg m^2]")
     parser.add_argument("--leg_vel_limit", type=float, default=None, help="물리: 다리 velocity_limit_sim [rad/s] (기본 6)")
     parser.add_argument("--dt", type=float, default=None, help="물리 스텝 [s] (기본 0.005). 제어 주기 0.02 s 는 유지")
+    parser.add_argument("--ctrl_hz", type=float, default=None,
+                        help="정책 제어 주기 [Hz] (기본 50). 물리 스텝 몇 번에 한 번인지로 맞춤 (dt 0.005 에서 18 -> 11 스텝 = 18.2 Hz)")
