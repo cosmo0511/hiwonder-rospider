@@ -355,6 +355,18 @@ def _exp3m(env, agent):
     env.rewards.track_vy_mean = RewTerm(func=mdp.track_vy_mean_exp, weight=1.0, params={"tau": 2.0, "std": 0.02})
 
 
+def _exp3n(env, agent):
+    """3-n: 3-m 을 실물 제어 주기 18 Hz 로. 실물은 버스 서보 18 개를 115200 bps 로 하나씩 읽고 써서 약 18 Hz
+    (다른 팀 측정, 계산상 18 ~ 26 Hz). 3-m (50 Hz) 을 18 Hz 로 그냥 돌리면 코스는 97 % 완주하지만 평지 0.147 -> 0.087 m/s.
+    물리 dt 0.005 는 그대로, 11 스텝에 한 번 행동 (18.2 Hz).
+    실행: TRAIN_EXTRA="--std_max 0.5 --bound_coef 0.1", 3-m 체크포인트에서 이어서"""
+    _exp3m(env, agent)
+    old_dt = env.sim.dt * env.decimation
+    env.decimation = 11
+    env.sim.render_interval = env.decimation
+    env.rewards.goal_bonus.weight *= old_dt / (env.sim.dt * env.decimation)   # 도착 보너스는 한 번에 2 가 되게 (weight x step_dt)
+
+
 BASE_YAW_RATE = 0.81   # wasd A 키(wz = 1) 제자리 회전 속도 rad/s. command_eval.py --controller tripod 로 잼 (8대 평균 0.812)
 
 
@@ -380,6 +392,7 @@ EXPERIMENTS = {
     "3k": _exp3k,
     "3l": _exp3l,
     "3m": _exp3m,
+    "3n": _exp3n,
 }
 
 
