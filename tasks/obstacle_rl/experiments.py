@@ -367,6 +367,19 @@ def _exp3n(env, agent):
     env.rewards.goal_bonus.weight *= old_dt / (env.sim.dt * env.decimation)   # 도착 보너스는 한 번에 2 가 되게 (weight x step_dt)
 
 
+def _exp3o(env, agent):
+    """3-o: 3-n 에 할인율을 시간 기준으로 맞춤. 3-n 은 평지에서 제자리걸음 (0.012 m/s) 으로 굳었다.
+    gamma 0.99 는 스텝마다 곱해져서 50 Hz 에선 약 2 초 앞을 보지만 18 Hz 에선 약 5.5 초 앞을 본다.
+    멀리 볼수록 목표에 빨리 닿아 에피소드가 끝나는 것보다 천천히 오래 버티며 보상을 모으는 게 이득이라
+    학습 중 도착 비율 0.62 -> 0.36, 평지 속도 0.092 -> 0.012 로 계속 떨어졌다.
+    50 Hz 와 같은 시간 범위가 되게 gamma = 0.99^(55/20) = 0.973, lam = 0.95^(55/20) = 0.868.
+    실행: TRAIN_EXTRA="--std_max 0.5 --bound_coef 0.1", 3-m 체크포인트에서 이어서"""
+    _exp3n(env, agent)
+    k = (env.sim.dt * env.decimation) / 0.02
+    agent.algorithm.gamma = 0.99 ** k
+    agent.algorithm.lam = 0.95 ** k
+
+
 BASE_YAW_RATE = 0.81   # wasd A 키(wz = 1) 제자리 회전 속도 rad/s. command_eval.py --controller tripod 로 잼 (8대 평균 0.812)
 
 
@@ -393,6 +406,7 @@ EXPERIMENTS = {
     "3l": _exp3l,
     "3m": _exp3m,
     "3n": _exp3n,
+    "3o": _exp3o,
 }
 
 
