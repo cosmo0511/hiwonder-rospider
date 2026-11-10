@@ -22,7 +22,8 @@ python tasks/obstacle_rl/play.py --checkpoint logs/rsl_rl/rospider_obstacle/<날
 | `test_course.py` | 지형 기하 검사 |
 
 **상태 (2026-11-10)**: 땅을 못 보는(블라인드) CPG + RL 정책(3-m)이 실물 코스 맵 1 40/40, 맵 2 · 파이프 · 계단 20/20 완주 (기존 걸음 맵 0/10).
-멈추기 · 제자리 돌기 · 걸으며 돌기 명령도 따르고, 착지 때 관절 속도가 실물 서보 한계(약 6 rad/s) 안이다. 최종 정책 파일은 [`policy/`](policy/).
+멈추기 · 제자리 돌기 · 걸으며 돌기 명령도 따르고, 착지 때 관절 속도가 실물 서보 한계(약 6 rad/s) 안이다.
+**2026-11-11**: 실물 제어 주기 약 18 Hz에 맞춰 이어 학습한 3-p도 코스 99/100, 평지 0.144 m/s (15 ~ 25 Hz에도 완주). 최종 정책 파일은 [`policy/`](policy/) (50 Hz 3-m, 18 Hz 3-p).
 결과와 흐름은 [POLICY_SUMMARY.md](POLICY_SUMMARY.md), 시간순 기록은 [NIGHT_LOG.md](NIGHT_LOG.md).
 
 <table>
