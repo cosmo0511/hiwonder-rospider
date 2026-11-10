@@ -21,7 +21,30 @@ python tasks/obstacle_rl/play.py --checkpoint logs/rsl_rl/rospider_obstacle/<날
 | `train.py`, `play.py` | 학습, 평가 |
 | `test_course.py` | 지형 기하 검사 |
 
-**상태 (2026-11-09)**: 땅을 보는 CPG + RL 정책이 실물 코스 맵 1 10/10, 맵 2 8/10 완주 (기존 걸음 0/10).
+**상태 (2026-11-10)**: 땅을 못 보는(블라인드) CPG + RL 정책(3-m)이 실물 코스 맵 1 40/40, 맵 2 · 파이프 · 계단 20/20 완주 (기존 걸음 맵 0/10).
+멈추기 · 제자리 돌기 · 걸으며 돌기 명령도 따르고, 착지 때 관절 속도가 실물 서보 한계(약 6 rad/s) 안이다. 최종 정책 파일은 [`policy/`](policy/).
 결과와 흐름은 [POLICY_SUMMARY.md](POLICY_SUMMARY.md), 시간순 기록은 [NIGHT_LOG.md](NIGHT_LOG.md).
+
+<table>
+<tr>
+<th width="50%">기존 걸음: 계단에서 뒤집힘</th>
+<th width="50%">최종 정책 (3-m): 맵 1 완주</th>
+</tr>
+<tr>
+<td><img src="media/course_stairs_tripod.gif" width="100%"></td>
+<td><img src="media/course_map1_blind3m.gif" width="100%"></td>
+</tr>
+<tr>
+<th>평지: CPG + RL 걸음</th>
+<th>명령 따라하기: 직진 → 정지 → 제자리 돌기 → 걸으며 돌기</th>
+</tr>
+<tr>
+<td><img src="media/exp2f_cpg_rl.gif" width="100%"></td>
+<td><img src="media/command_follow_blind3k.gif" width="100%"></td>
+</tr>
+</table>
+
+영상은 2배속. 맵 1 = 구덩이 → 굴러가는 파이프 → 계단 4단 → 작업대.
+
 실험 하나 돌리기: `bash tasks/obstacle_rl/run_exp.sh <실험> <회수> 0.18 <이어받을 체크포인트>` (실험 목록은 `experiments.py`),
 코스 평가: `python tasks/obstacle_rl/course_eval.py --headless --controller policy --exp <실험> --checkpoint <ckpt> --maps map1 map2 pipes stairs`.
