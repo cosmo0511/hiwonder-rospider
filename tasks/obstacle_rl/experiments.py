@@ -380,6 +380,15 @@ def _exp3o(env, agent):
     agent.algorithm.lam = 0.95 ** k
 
 
+def _exp3p(env, agent):
+    """3-p: 3-o 에 CPG 박자 하한을 올림. 3-o 는 코스는 빨라졌지만 (map1 13.8 s) 평지 직진은 0.061 m/s, 제자리 돌기도 명령의 절반.
+    다리당 걸음 수 0.79 Hz (CPG 기본 1.2 Hz 의 0.66 배, 3-n 은 0.58 Hz = 하한 0.5 배) -> 정책이 박자를 늦추는 쪽으로 감.
+    행동 0 (CPG 만) 은 18 Hz 에서도 0.161 m/s 로 걸으니 박자 범위를 0.5 ~ 1.3 -> 0.9 ~ 1.3 배로.
+    실행: TRAIN_EXTRA="--std_max 0.5 --bound_coef 0.1", 3-m 체크포인트에서 이어서"""
+    _exp3o(env, agent)
+    env.actions.cpg.freq_scale = (0.9, 1.3)
+
+
 BASE_YAW_RATE = 0.81   # wasd A 키(wz = 1) 제자리 회전 속도 rad/s. command_eval.py --controller tripod 로 잼 (8대 평균 0.812)
 
 
@@ -407,6 +416,7 @@ EXPERIMENTS = {
     "3m": _exp3m,
     "3n": _exp3n,
     "3o": _exp3o,
+    "3p": _exp3p,
 }
 
 
