@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 실험 하나를 끝까지: 학습 -> 걸음새 평가(16마리) -> 영상(4마리). 레포 루트에서 실행.
+# 실험 하나를 끝까지: 학습 -> 걸음새 평가(16마리) -> 영상(4마리) -> 넘어짐 / 잘 걷기 장면. 레포 루트에서 실행.
 #   bash tasks/obstacle_rl/run_exp.sh 2c            # 1500 iteration
 #   bash tasks/obstacle_rl/run_exp.sh 2c 800 0.12   # iteration 수, 평가 명령 속도(m/s)
 #   bash tasks/obstacle_rl/run_exp.sh 3a 1500 0.18 logs/.../model_1999.pt   # 4번째 = 이어 학습할 체크포인트
@@ -28,4 +28,11 @@ echo "[run_exp] 평가 종료 코드 $?"
 python tasks/obstacle_rl/gait_eval.py --headless --enable_cameras --video --num_envs 4 --vx "$VX" --controller policy \
   --checkpoint "$CK" --exp "$EXP" --name "exp${EXP}_final_video" > "$OUT/video_exp$EXP.log" 2>&1
 echo "[run_exp] 영상 종료 코드 $?"
+# 넘어진 장면 / 가장 잘 걷는 장면 자동 저장 (outputs/obstacle_rl/highlights/). 고장 실험이면 왼쪽 앞 다리 힘 빠짐도 따로
+HL_EXPS=("$EXP"); [[ "$EXP" == f* ]] && HL_EXPS+=("$EXP@LF:limp")
+for HE in "${HL_EXPS[@]}"; do
+  python tasks/obstacle_rl/highlight_eval.py --headless --enable_cameras --exp "$HE" --vx "$VX" \
+    --checkpoint "$CK" > "$OUT/highlight_exp${HE//[@:]/_}.log" 2>&1
+  echo "[run_exp] 장면 저장($HE) 종료 코드 $?"
+done
 cat "$OUT/gait_eval/exp${EXP}_final/metrics.txt"

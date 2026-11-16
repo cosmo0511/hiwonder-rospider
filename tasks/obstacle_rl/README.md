@@ -20,6 +20,8 @@ python tasks/obstacle_rl/play.py --checkpoint logs/rsl_rl/rospider_obstacle/<날
 | `agents/rsl_rl_ppo_cfg.py` | PPO 설정 |
 | `train.py`, `play.py` | 학습, 평가 |
 | `test_course.py` | 지형 기하 검사 |
+| `servo_fault.py` | 18 Hz 서보 흉내 (읽기 지연, 0점 오차, 목표 보간) + 다리 고장. 실험 `r18`, `f18` ([FAULT_18HZ.md](FAULT_18HZ.md)) |
+| `highlight_eval.py` | 넘어진 장면 / 가장 잘 걷는 장면 자동 mp4 |
 
 **상태 (2026-11-10)**: 땅을 못 보는(블라인드) CPG + RL 정책(3-m)이 실물 코스 맵 1 40/40, 맵 2 · 파이프 · 계단 20/20 완주 (기존 걸음 맵 0/10).
 멈추기 · 제자리 돌기 · 걸으며 돌기 명령도 따르고, 착지 때 관절 속도가 실물 서보 한계(약 6 rad/s) 안이다. 최종 정책 파일은 [`policy/`](policy/).

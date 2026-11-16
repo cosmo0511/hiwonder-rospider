@@ -355,6 +355,74 @@ def _exp3m(env, agent):
     env.rewards.track_vy_mean = RewTerm(func=mdp.track_vy_mean_exp, weight=1.0, params={"tau": 2.0, "std": 0.02})
 
 
+def _exp_r18(env, agent):
+    """r18: 3-m 을 평지에서 18 Hz 로 (실물 버스 서보 주기). 관측 · 행동 크기는 3-m 과 같아서 3-m 체크포인트를 그대로 이어 받는다.
+    - 정책 주기 50 -> 18.2 Hz (물리 0.005 s x 11). gamma / lambda 는 같은 초 단위 시야로 (0.973 / 0.868)
+    - 관절 각: 서보 읽기 흉내 (읽기 지연 0 ~ 1 주기, 0점 오차 ±0.03 rad, 0.24 도 눈금)
+    - 관절 속도: 서보가 안 주므로 읽은 각의 차분 (실물에서 그대로 계산 가능)
+    - 서보 목표: 제어 주기 동안 직선 보간 (MOVE_TIME = 55 ms)
+    IMU(각속도, 중력 방향, 방향 오차) 는 3-m 그대로 정책에 들어간다.
+    실행: TRAIN_EXTRA="--std_max 0.5 --bound_coef 0.1" bash tasks/obstacle_rl/run_exp.sh r18 1500 0.15 tasks/obstacle_rl/policy/blind_3m_model_16096.pt"""
+    from isaaclab.utils.noise import UniformNoiseCfg as Unoise  # noqa: PLC0415
+
+    from . import servo_fault as servo  # noqa: PLC0415
+
+    _exp3m(env, agent)
+    make_flat(env)
+    servo.set_control_hz(env, 18.0)
+    servo.match_discount(env, agent)
+    env.actions.cpg = servo.to_servo_action(env.actions.cpg, interp=True)
+    pol = env.observations.policy
+    pol.joint_pos = ObsTerm(func=servo.ServoReading, params={"out": "pos"}, noise=Unoise(n_min=-0.005, n_max=0.005))
+    pol.joint_vel = ObsTerm(func=servo.ServoReading, params={"out": "vel"}, noise=Unoise(n_min=-0.3, n_max=0.3))
+    env.events.servo_state = EventTerm(func=servo.reset_servo_state, mode="reset", params={"p_fault": 0.0})
+
+
+def _exp_f18(env, agent):
+    """f18: r18 + 에피소드마다 다리 하나 고장 (75 %). 다리 전체 또는 관절 하나, 힘 빠짐 / 굳음 / 약함 (servo_fault.py).
+    - 정책에 고장 다리 one-hot 6 개 ('fault' 그룹, 맨 뒤에 붙음). critic 은 관절별 고장 모드까지
+    - tripod 보상(박자대로 딛기, 뜬 발, 미끄러짐, 발 높이)과 허벅지 충돌 벌점은 건강한 다리만 센다
+    행동은 r18 과 같다 (tripod CPG + 보정 0.2 rad). 5발 tripod 로 안 되면 다리별 박자 조절을 행동에 넣어야 한다 (FAULT_18HZ.md).
+    실행: r18 체크포인트에 입력 칸을 붙여서 이어 받는다
+      python tasks/obstacle_rl/expand_ckpt.py <r18.pt> <r18_f.pt> --actor_add 6 --critic_add 60
+      TRAIN_EXTRA="--std_max 0.5 --bound_coef 0.1" bash tasks/obstacle_rl/run_exp.sh f18 3000 0.12 <r18_f.pt>"""
+    from isaaclab.managers import ObservationGroupCfg as ObsGroup  # noqa: PLC0415
+    from isaaclab.utils import configclass  # noqa: PLC0415
+
+    from . import servo_fault as servo  # noqa: PLC0415
+
+    _exp_r18(env, agent)
+    env.events.servo_state.params["p_fault"] = 0.75
+
+    @configclass
+    class FaultCfg(ObsGroup):
+        legs = ObsTerm(func=servo.fault_legs)
+
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = True
+
+    @configclass
+    class FaultPrivCfg(ObsGroup):
+        legs = ObsTerm(func=servo.fault_legs)
+        joints = ObsTerm(func=servo.fault_joints)
+
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = True
+
+    env.observations.fault = FaultCfg()
+    env.observations.fault_priv = FaultPrivCfg()
+    agent.obs_groups = {"policy": ["policy", "fault"], "critic": ["critic", "fault_priv"]}
+
+    rw = env.rewards
+    rw.tripod_contact.func = servo.ft_tripod_contact
+    rw.stance_air.func = servo.ft_stance_air
+    rw.stance_slip.func = servo.ft_stance_slip
+    rw.swing_clearance.func = servo.ft_swing_clearance
+    rw.undesired_contacts = RewTerm(func=servo.ft_undesired_contacts, weight=-0.5)
+
+
 BASE_YAW_RATE = 0.81   # wasd A 키(wz = 1) 제자리 회전 속도 rad/s. command_eval.py --controller tripod 로 잼 (8대 평균 0.812)
 
 
@@ -380,10 +448,20 @@ EXPERIMENTS = {
     "3k": _exp3k,
     "3l": _exp3l,
     "3m": _exp3m,
+    "r18": _exp_r18,
+    "f18": _exp_f18,
 }
 
 
 def apply(name: str, env_cfg, agent_cfg) -> None:
+    """name 뒤에 '@고장' 을 붙이면 (평가용) 모든 env 를 그 고장으로 고정: 'f18@LF', 'f18@LF:locked',
+    'r18@LF.femur:weak', 'f18@none'. 모드 기본은 limp. r18 / f18 계열만 된다."""
+    name, _, fault = name.partition("@")
     if name not in EXPERIMENTS:
         raise SystemExit(f"모르는 실험 '{name}'. 있는 것: {', '.join(EXPERIMENTS)}")
     EXPERIMENTS[name](env_cfg, agent_cfg)
+    if fault:
+        st = getattr(env_cfg.events, "servo_state", None)
+        if st is None:
+            raise SystemExit(f"'@{fault}' 는 r18 / f18 계열 실험에서만 쓸 수 있다")
+        st.params["fixed"] = fault
