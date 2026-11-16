@@ -241,7 +241,7 @@ class ServoReading(ManagerTermBase):
             env_ids = slice(None)
         self.fresh[env_ids] = True
 
-    def __call__(self, env, out: str = "pos", quantize: bool = True, mask_faulty: bool = True, joint_names=None, **_):
+    def __call__(self, env, out: str = "pos", quantize: bool = True, mask_faulty: bool = True, joint_names=None):
         st = _state(env)
         robot: Articulation = env.scene["robot"]
         q = robot.data.joint_pos[:, st["ids"]]
