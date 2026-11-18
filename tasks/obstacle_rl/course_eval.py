@@ -142,6 +142,10 @@ def main() -> None:
     env_cfg.viewer.resolution = (1280, 720)
 
     env = ManagerBasedRLEnv(cfg=env_cfg, render_mode="rgb_array" if args.video else None)
+    if args.servo_delay_ms > 0:
+        from obstacle_rl.servo_delay import add_servo_delay  # noqa: PLC0415
+
+        print(f"[eval] 서보 명령 지연 {args.servo_delay_ms:.0f} ms = 물리 {add_servo_delay(env, args.servo_delay_ms)} 스텝", flush=True)
     env.reset()
     if args.controller == "policy":
         from rsl_rl.runners import OnPolicyRunner  # noqa: PLC0415

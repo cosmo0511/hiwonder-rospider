@@ -1,0 +1,342 @@
+{
+ "servo_info": {
+  "coxa_LF": {
+   "id": 5,
+   "position": [
+    472
+   ],
+   "offset": [
+    -5
+   ],
+   "temperature": [
+    55
+   ],
+   "position_limit": [
+    0,
+    1000
+   ]
+  },
+  "coxa_LM": {
+   "id": 11,
+   "position": [
+    497
+   ],
+   "offset": [
+    2
+   ],
+   "temperature": [
+    64
+   ],
+   "position_limit": [
+    0,
+    1000
+   ]
+  },
+  "coxa_LR": {
+   "id": 17,
+   "position": [
+    527
+   ],
+   "offset": [
+    -14
+   ],
+   "temperature": [
+    39
+   ],
+   "position_limit": [
+    0,
+    1000
+   ]
+  },
+  "coxa_RF": {
+   "id": 6,
+   "position": [
+    527
+   ],
+   "offset": [
+    3
+   ],
+   "temperature": [
+    37
+   ],
+   "position_limit": [
+    0,
+    1000
+   ]
+  },
+  "coxa_RM": {
+   "id": 12,
+   "position": [
+    500
+   ],
+   "offset": [
+    -8
+   ],
+   "temperature": [
+    38
+   ],
+   "position_limit": [
+    0,
+    1000
+   ]
+  },
+  "coxa_RR": {
+   "id": 18,
+   "position": [
+    473
+   ],
+   "offset": [
+    -6
+   ],
+   "temperature": [
+    62
+   ],
+   "position_limit": [
+    0,
+    1000
+   ]
+  },
+  "femur_LF": {
+   "id": 3,
+   "position": [
+    312
+   ],
+   "offset": [
+    -2
+   ],
+   "temperature": [
+    71
+   ],
+   "position_limit": [
+    0,
+    1000
+   ]
+  },
+  "femur_LM": {
+   "id": 9,
+   "position": [
+    314
+   ],
+   "offset": [
+    12
+   ],
+   "temperature": [
+    65
+   ],
+   "position_limit": [
+    0,
+    1000
+   ]
+  },
+  "femur_LR": {
+   "id": 15,
+   "position": [
+    317
+   ],
+   "offset": [
+    -5
+   ],
+   "temperature": [
+    37
+   ],
+   "position_limit": [
+    0,
+    1000
+   ]
+  },
+  "femur_RF": {
+   "id": 4,
+   "position": [
+    681
+   ],
+   "offset": [
+    -5
+   ],
+   "temperature": [
+    47
+   ],
+   "position_limit": [
+    0,
+    1000
+   ]
+  },
+  "femur_RM": {
+   "id": 10,
+   "position": [
+    686
+   ],
+   "offset": [
+    -6
+   ],
+   "temperature": [
+    67
+   ],
+   "position_limit": [
+    0,
+    1000
+   ]
+  },
+  "femur_RR": {
+   "id": 16,
+   "position": [
+    687
+   ],
+   "offset": [
+    -5
+   ],
+   "temperature": [
+    68
+   ],
+   "position_limit": [
+    0,
+    1000
+   ]
+  },
+  "tibla_LF": {
+   "id": 1,
+   "position": [
+    729
+   ],
+   "offset": [
+    -11
+   ],
+   "temperature": [
+    52
+   ],
+   "position_limit": [
+    0,
+    1000
+   ]
+  },
+  "tibla_LM": {
+   "id": 7,
+   "position": [
+    670
+   ],
+   "offset": [
+    -18
+   ],
+   "temperature": [
+    70
+   ],
+   "position_limit": [
+    0,
+    1000
+   ]
+  },
+  "tibla_LR": {
+   "id": 13,
+   "position": [
+    656
+   ],
+   "offset": [
+    -6
+   ],
+   "temperature": [
+    37
+   ],
+   "position_limit": [
+    0,
+    1000
+   ]
+  },
+  "tibla_RF": {
+   "id": 2,
+   "position": [
+    345
+   ],
+   "offset": [
+    12
+   ],
+   "temperature": [
+    36
+   ],
+   "position_limit": [
+    0,
+    1000
+   ]
+  },
+  "tibla_RM": {
+   "id": 8,
+   "position": [
+    329
+   ],
+   "offset": [
+    10
+   ],
+   "temperature": [
+    72
+   ],
+   "position_limit": [
+    0,
+    1000
+   ]
+  },
+  "tibla_RR": {
+   "id": 14,
+   "position": [
+    343
+   ],
+   "offset": [
+    -12
+   ],
+   "temperature": [
+    38
+   ],
+   "position_limit": [
+    0,
+    1000
+   ]
+  }
+ },
+ "read_timing": {
+  "18": {
+   "mean_ms": 50.54487936000896,
+   "p50": 50.16617599994788,
+   "p95": 54.43190080006843,
+   "max": 56.13343999993958,
+   "fail": 0,
+   "n": 50
+  },
+  "6": {
+   "mean_ms": 18.16914496001573,
+   "p50": 18.010639999943123,
+   "p95": 19.879209600139802,
+   "max": 20.48163199992814,
+   "fail": 0,
+   "n": 50
+  },
+  "1": {
+   "mean_ms": 4.72992640000939,
+   "p50": 4.485760000079608,
+   "p95": 6.19644799986645,
+   "max": 6.803488000059588,
+   "fail": 0,
+   "n": 50
+  }
+ },
+ "imu": {
+  "rate_hz": 48.84456499959273,
+  "n": 245,
+  "acc_mean": [
+   -0.0008062107631138389,
+   0.838723044433594,
+   9.806498530099033
+  ],
+  "acc_std": [
+   0.0020971101819819093,
+   0.0021100710525621563,
+   0.002019241382594703
+  ],
+  "gyro_mean": [
+   0.010594554838417427,
+   0.011313195271018732,
+   -0.0013898352916271797
+  ],
+  "gyro_std": [
+   0.0007517899729063371,
+   0.0008229678739374149,
+   0.0008858482368946138
+  ]
+ }
+}

@@ -355,6 +355,40 @@ def _exp3m(env, agent):
     env.rewards.track_vy_mean = RewTerm(func=mdp.track_vy_mean_exp, weight=1.0, params={"tau": 2.0, "std": 0.02})
 
 
+def _exp3n(env, agent):
+    """3-n: 3-m 을 실물 제어 주기 18 Hz 로. 실물은 버스 서보 18 개를 115200 bps 로 하나씩 읽고 써서 약 18 Hz
+    (다른 팀 측정, 계산상 18 ~ 26 Hz). 3-m (50 Hz) 을 18 Hz 로 그냥 돌리면 코스는 97 % 완주하지만 평지 0.147 -> 0.087 m/s.
+    물리 dt 0.005 는 그대로, 11 스텝에 한 번 행동 (18.2 Hz).
+    실행: TRAIN_EXTRA="--std_max 0.5 --bound_coef 0.1", 3-m 체크포인트에서 이어서"""
+    _exp3m(env, agent)
+    old_dt = env.sim.dt * env.decimation
+    env.decimation = 11
+    env.sim.render_interval = env.decimation
+    env.rewards.goal_bonus.weight *= old_dt / (env.sim.dt * env.decimation)   # 도착 보너스는 한 번에 2 가 되게 (weight x step_dt)
+
+
+def _exp3o(env, agent):
+    """3-o: 3-n 에 할인율을 시간 기준으로 맞춤. 3-n 은 평지에서 제자리걸음 (0.012 m/s) 으로 굳었다.
+    gamma 0.99 는 스텝마다 곱해져서 50 Hz 에선 약 2 초 앞을 보지만 18 Hz 에선 약 5.5 초 앞을 본다.
+    멀리 볼수록 목표에 빨리 닿아 에피소드가 끝나는 것보다 천천히 오래 버티며 보상을 모으는 게 이득이라
+    학습 중 도착 비율 0.62 -> 0.36, 평지 속도 0.092 -> 0.012 로 계속 떨어졌다.
+    50 Hz 와 같은 시간 범위가 되게 gamma = 0.99^(55/20) = 0.973, lam = 0.95^(55/20) = 0.868.
+    실행: TRAIN_EXTRA="--std_max 0.5 --bound_coef 0.1", 3-m 체크포인트에서 이어서"""
+    _exp3n(env, agent)
+    k = (env.sim.dt * env.decimation) / 0.02
+    agent.algorithm.gamma = 0.99 ** k
+    agent.algorithm.lam = 0.95 ** k
+
+
+def _exp3p(env, agent):
+    """3-p: 3-o 에 CPG 박자 하한을 올림. 3-o 는 코스는 빨라졌지만 (map1 13.8 s) 평지 직진은 0.061 m/s, 제자리 돌기도 명령의 절반.
+    다리당 걸음 수 0.79 Hz (CPG 기본 1.2 Hz 의 0.66 배, 3-n 은 0.58 Hz = 하한 0.5 배) -> 정책이 박자를 늦추는 쪽으로 감.
+    행동 0 (CPG 만) 은 18 Hz 에서도 0.161 m/s 로 걸으니 박자 범위를 0.5 ~ 1.3 -> 0.9 ~ 1.3 배로.
+    실행: TRAIN_EXTRA="--std_max 0.5 --bound_coef 0.1", 3-m 체크포인트에서 이어서"""
+    _exp3o(env, agent)
+    env.actions.cpg.freq_scale = (0.9, 1.3)
+
+
 BASE_YAW_RATE = 0.81   # wasd A 키(wz = 1) 제자리 회전 속도 rad/s. command_eval.py --controller tripod 로 잼 (8대 평균 0.812)
 
 
@@ -380,6 +414,9 @@ EXPERIMENTS = {
     "3k": _exp3k,
     "3l": _exp3l,
     "3m": _exp3m,
+    "3n": _exp3n,
+    "3o": _exp3o,
+    "3p": _exp3p,
 }
 
 
